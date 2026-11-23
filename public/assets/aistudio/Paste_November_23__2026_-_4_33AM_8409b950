@@ -1,0 +1,1548 @@
+PROMPT 0: Foundation and contracts
+You are a senior TypeScript architect. We are building SafeCircle, a scam
+shield for senior citizens in India (English + Malayalam). We are building it
+in layers, with one prompt per layer. This prompt creates ONLY the foundation:
+project scaffold, shared contracts and documentation. Do NOT build UI screens,
+the detection logic, or backend features yet.
+
+## Tasks
+
+1. Initialise a monorepo-style project (npm workspaces):
+   - packages/engine   -> pure TypeScript scam detection engine (no React,
+                          no DOM, no Node-only APIs; must run in browser,
+                          Node, and later an embedded JS runtime)
+   - apps/web          -> React + Vite + TypeScript (strict) + Tailwind PWA
+                          (empty shell with a single placeholder page only)
+   - supabase/         -> migrations folder (empty for now)
+   - android/          -> placeholder README only
+   - docs/
+   Use TypeScript strict mode everywhere. Add ESLint, Prettier, Vitest.
+   Add npm scripts: dev, build, test, lint, typecheck at the root.
+
+2. Create shared contracts in packages/engine/src/types.ts. These are the
+   contracts every later layer must follow:
+   - Verdict = "SAFE" | "BE_CAREFUL" | "DANGEROUS"
+   - Language = "en" | "ml"
+   - SignalId (string union): AUTHORITY_CLAIM, URGENCY_THREAT, SECRECY,
+     MONEY_REQUEST, SENSITIVE_INFO_REQUEST, REMOTE_ACCESS, SUSPICIOUS_URL,
+     APK_INSTALL, EMERGENCY_RELATIVE, PRIZE_LOTTERY, INVESTMENT_FRAUD,
+     LEGIT_CONTEXT (negative signal)
+   - Indicator { signalId, weight, matchedRuleId, evidenceType } 
+     NOTE: indicators must NOT contain the raw matched text, only rule ids.
+   - ScanInput { text: string; source: "manual"|"share"|"notification"|
+     "call_sim"; language?: Language }
+   - ScanResult { score: number (0-100); verdict: Verdict; indicators:
+     Indicator[]; overridesTriggered: string[]; explanation: { en: string;
+     ml: string }; recommendedAction: { en: string; ml: string };
+     detectionMethod: "LOCAL_RULES"|"LOCAL_AI"|"CLOUD_AI"|"HYBRID";
+     rulePackVersion: string; scannedAt: string }
+   - Incident (what may be stored/synced): id, scannedAt, score, verdict,
+     category, signalIds[], detectionMethod, reviewed, falsePositive,
+     userOutcome ("avoided"|"interacted"|"unsure"|null). NO message text.
+   - GuardianAlert { id, elderId, incidentId, verdict, signalIds[],
+     suggestedAction, createdAt, status }
+   Export everything from the package index.
+
+3. Define the rule-pack JSON schema (packages/engine/src/rulepack.schema.json
+   plus a TS type and a runtime validator using zod):
+   - version, updatedAt
+   - signals: list of { signalId, weight, rules[] }
+   - rules: { id, type: "regex"|"phrase"|"domain", pattern, languages[],
+     notes }
+   - overrides: list of { id, requires: SignalId[] (all), anyOf?: SignalId[],
+     forceVerdict, minScore, reason }
+   - thresholds: { carefulMin, dangerousMin }
+   - templates: explanation/action text keyed by signal or override id, each
+     with en and ml
+   The pack is DATA, so a Kotlin interpreter can run the same pack later.
+
+4. Create docs/ARCHITECTURE.md containing:
+   - Product summary and principles (privacy by design, offline-first, cloud
+     never required, cloud may never lower a verdict, no raw message storage,
+     no call recording)
+   - Folder structure and what each package may import (engine imports
+     nothing from apps)
+   - The contracts above (reference types.ts)
+   - Decisions log (start with: monorepo; PWA first; Capacitor for Android
+     later; Supabase auth moves to the backend layer; Gemini optional and
+     off by default; engine is data-driven so TS and Kotlin share one rule
+     pack and one conformance test file)
+   - Layer plan: 1 engine, 2 PWA senior flow, 3 Supabase auth + family
+     linking, 4 guardian + alerts + cloud explanations, 5 Android native,
+     6 premium/analytics/polish
+   - A Feature Status Matrix table (Feature | Status: Not started /
+     In progress / Functional / Simulated / Needs config | Notes)
+   - A "Rules for future prompts" section: read this file first; do not
+     change contracts without an explicit instruction; update this file at
+     the end of each layer.
+
+5. Create .env.example with names and one-line descriptions only (no real
+   values): SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+   (server only), GEMINI_API_KEY (server only), SAFE_BROWSING_API_KEY
+   (server only), TELEGRAM_BOT_TOKEN (server only), EMAIL_PROVIDER_API_KEY
+   (server only), VAPID keys, FCM server credentials. Note clearly which
+   are server-only and must never be prefixed for client exposure.
+
+6. Add a .gitignore that excludes .env files, then initialise git and make
+   the first commit.
+
+## Acceptance criteria (verify by running them)
+- npm install, npm run typecheck, npm run lint, npm test and npm run build
+  all succeed from a clean checkout.
+- npm run dev serves the web shell.
+- packages/engine builds with no dependency on React or the DOM.
+- A smoke test in packages/engine validates a minimal sample rule pack
+  against the schema.
+- ARCHITECTURE.md exists and matches the actual folder layout.
+
+Do not stop after planning. Run the commands, fix errors, and report what
+was verified.
+PROMPT 1: Detection engine and test suite (no UI)
+Read docs/ARCHITECTURE.md and the existing code first. Do not change any
+existing contract in packages/engine/src/types.ts or the rule-pack schema.
+If you believe a contract must change, stop and tell me why instead of
+changing it.
+
+Build the SafeCircle detection engine in packages/engine. No UI work in this
+prompt.
+
+## 1. Pipeline
+scan(input: ScanInput, pack: RulePack): ScanResult
+Steps:
+a) Normalise text (see section 2).
+b) Evaluate every rule in the pack and collect matched signals (de-duplicate
+   per signal: a signal counts once even if several rules match it).
+c) Apply LEGIT_CONTEXT as a negative signal (see section 4).
+d) Compute the additive score, capped at 100 and floored at 0.
+e) Apply override rules from the pack (they can only RAISE the verdict/score
+   to a minimum, never lower it).
+f) Map the score to a verdict using the pack thresholds (default 0-29 SAFE,
+   30-59 BE_CAREFUL, 60-100 DANGEROUS).
+g) Build explanation and recommendedAction in BOTH English and Malayalam from
+   the pack templates. Explanations must name the detected tactics in plain
+   language a senior can follow. No LLM is used in this layer.
+h) Never return or log the raw message text. Indicators carry rule ids only.
+The engine must be a pure function: no network, no storage, no global state,
+deterministic output.
+
+## 2. Normalisation
+- Unicode NFKC, lowercase for Latin text, collapse whitespace.
+- Remove zero-width characters and normalise Malayalam chillu/ZWJ/ZWNJ
+  variants so that visually identical Malayalam strings match.
+- Map common homoglyphs and digit/letter swaps (0/o, 1/l/i, @/a, $/s) only
+  inside tokens that look like obfuscation.
+- Collapse spaced-out words ("O T P", "K Y C", "a n y d e s k").
+- Handle Devanagari digits and Malayalam digits in amounts and phone numbers.
+- Extract URLs and domains into a separate list for the URL rules.
+
+## 3. Rule pack content (packages/engine/rulepacks/in-v1.json)
+Write a real, versioned rule pack covering English, Malayalam script AND
+Manglish (Malayalam written in Latin script, e.g. "ningalude account block
+aayi"), plus common Hinglish. Signals:
+- AUTHORITY_CLAIM: police, CBI, ED, RBI, TRAI, income tax, customs, court,
+  cyber cell, bank officer, courier/FedEx/DHL, KSEB, RTO.
+- URGENCY_THREAT: arrest, warrant, blocked, suspended, legal action, expires
+  today, last warning, SIM will be disconnected.
+- SECRECY: do not tell anyone, do not inform family, do not disconnect the
+  call, keep confidential.
+- MONEY_REQUEST: transfer, pay fee/fine/deposit, refund fee, send via UPI,
+  scan this QR to receive money, collect request.
+- SENSITIVE_INFO_REQUEST: must detect REQUESTING info (share/send/tell/enter
+  your OTP, PIN, CVV, Aadhaar, password, card number). A message that only
+  DELIVERS an OTP ("Your OTP is 123456") must NOT trigger this.
+- REMOTE_ACCESS: AnyDesk, TeamViewer, QuickSupport, RustDesk, screen share,
+  "install this app to verify".
+- SUSPICIOUS_URL: shorteners (bit.ly, tinyurl, etc. as a weak signal),
+  typosquatted bank/government domains, IP-address links, suspicious TLDs,
+  non-https payment links, lookalike domains (e.g. sbi-kyc-update.xyz).
+  Include a small local list of official domains per bank/government body
+  to compare against.
+- APK_INSTALL: ".apk", "install this file", "download the app from this link"
+  such as fake RTO challan, PM Kisan or bank reward APKs.
+- EMERGENCY_RELATIVE: "I am your son/grandson and in trouble, send money,
+  don't tell dad".
+- PRIZE_LOTTERY, INVESTMENT_FRAUD (guaranteed returns, crypto/trading group,
+  task/like-and-earn jobs).
+- LEGIT_CONTEXT (negative weight): "never share your OTP with anyone",
+  standard bank alert formats (debit/credit alert, OTP delivery), official
+  sender style patterns, official domains.
+Weights: start with the proposal below, capped at 100 total:
+ AUTHORITY 15, URGENCY 15, SECRECY 20, MONEY 20, SENSITIVE_INFO 25,
+ REMOTE_ACCESS 25, SUSPICIOUS_URL 20, APK_INSTALL 25, EMERGENCY_RELATIVE 20,
+ PRIZE 15, INVESTMENT 20, LEGIT_CONTEXT -20.
+Overrides (in the pack, not hardcoded):
+ - REMOTE_ACCESS + any of (MONEY_REQUEST, SENSITIVE_INFO_REQUEST,
+   AUTHORITY_CLAIM) -> DANGEROUS, minScore 80
+ - AUTHORITY_CLAIM + (SECRECY or MONEY_REQUEST) + (URGENCY_THREAT) ->
+   DANGEROUS, minScore 75
+ - SECRECY + MONEY_REQUEST -> at least BE_CAREFUL, minScore 45
+ - APK_INSTALL + (AUTHORITY_CLAIM or URGENCY_THREAT or MONEY_REQUEST) ->
+   DANGEROUS, minScore 70
+ - EMERGENCY_RELATIVE + (MONEY_REQUEST or SECRECY) -> DANGEROUS, minScore 65
+ - SENSITIVE_INFO_REQUEST + (URGENCY_THREAT or AUTHORITY_CLAIM) ->
+   DANGEROUS, minScore 65
+ - LEGIT_CONTEXT must NOT cancel an override if SECRECY or REMOTE_ACCESS is
+   present.
+A single signal alone must never produce DANGEROUS unless the pack says so
+explicitly.
+Write templates in English and Malayalam for every signal and override. Mark
+all Malayalam templates with a "needsNativeReview": true flag in the pack,
+because a native speaker must review them before release.
+
+## 4. Test suite (Vitest)
+Create a dataset under packages/engine/tests/data/ as JSON files with fields
+{ id, text, expectedVerdict, expectedSignals, category, language, split }.
+split is "tune" or "heldout". Roughly 70% tune, 30% heldout. Heldout cases
+must NOT be used while tuning weights or rules.
+Minimum counts (write realistic, varied examples, not near-duplicates):
+- 20 digital arrest scams, 20 fake KYC, 20 OTP phishing, 20 UPI scams
+- 20 legitimate bank messages (include OTP delivery, debit/credit alerts,
+  "never share your OTP" warnings, real KYC reminders from official
+  domains)
+- 20 legitimate government/utility notifications
+- 20 Malayalam scam, 20 Malayalam legitimate
+- 20 Manglish scam, 20 Manglish legitimate
+- 15 APK scams, 15 emergency-relative scams, 10 investment/task scams
+- 30 adversarial cases: spaced letters, homoglyphs, mixed language, zero-width
+  characters, shortened URLs, emojis, all caps
+- 20 hard negatives: legitimate messages that contain scary words (arrest in a
+  news forward, "urgent" from a real pharmacy, "police verification" for a
+  real rental, a family member genuinely asking about money without secrecy)
+Tests to write:
+- Per-dataset runner reporting for tune and heldout separately: confusion
+  matrix by verdict, recall on DANGEROUS, false-positive rate on legitimate
+  messages, and the list of misclassified ids. Print these in the console.
+- Unit tests for the normaliser, each signal, each override, score capping,
+  and the rule that overrides never lower a verdict.
+- Privacy test: ScanResult serialised to JSON must not contain any substring
+  of the input longer than 3 words.
+- Determinism test: the same input gives byte-identical output.
+- Performance test: a scan of a 2,000-character message completes in under
+  50 ms on average.
+- Conformance file: generate tests/conformance/vectors.json (input text,
+  expected verdict, expected sorted signalIds, expected minimum score) from
+  the heldout and unit cases. This file will be reused later by the Kotlin
+  engine, so keep it free of TS-specific details.
+
+## 5. Quality rules
+- Report real metrics from the test run. Do NOT claim an accuracy percentage
+  that you did not measure. Include a docs/ENGINE_REPORT.md with the measured
+  numbers, the known misclassifications, and the known gaps.
+- Tune rules and weights using the "tune" split only, then run the "heldout"
+  split once at the end and report it honestly, even if it is worse.
+- Avoid catastrophic regexes (no nested quantifiers on user input); add a
+  test with a long adversarial string to confirm there is no ReDoS.
+- Keep the engine dependency-light (zod for the pack validator is fine).
+
+## 6. Documentation and finish
+- Update docs/ARCHITECTURE.md: decisions log, Feature Status Matrix (engine:
+  Functional, Malayalam templates: Needs native review), and how to add or
+  change rules.
+- Export a small API: scan, loadRulePack, validateRulePack, getVersion.
+- Run typecheck, lint, tests and build. Fix every failure.
+- Commit with a clear message.
+
+Acceptance criteria: all commands pass; every override in section 3 has a
+test; heldout results are reported separately in ENGINE_REPORT.md; no raw
+message text appears in any ScanResult.
+What to do before running Prompt 1
+Review the rule pack the agent produces. The weights are starting points. Expect to tune them against your real examples.
+Get a Malayalam speaker to review the templates and the Malayalam test cases. The agent's Malayalam and Manglish will contain mistakes.
+Check ENGINE_REPORT.md for the heldout numbers before moving on. A weak result there is much cheaper to fix now than after the UI is built.
+
+When you're done, send me the report or any problems, and I'll write Prompt 2 (the PWA senior flow) to match what was actually built.
+
+next
+
+Here's Prompt 2. I wrote it against the contracts from Prompts 0 and 1, so it tells the agent to read the real engine API first. If the engine's exports differ from what I assumed, the agent should adapt to the code and not the other way round.
+
+PROMPT 2: PWA senior experience (local-only, no backend)
+Read docs/ARCHITECTURE.md, packages/engine (its exported API, types.ts and
+docs/ENGINE_REPORT.md) and apps/web first. Do not change existing contracts in
+packages/engine/src/types.ts or the rule-pack schema. Adding NEW modules or
+types is allowed. If a contract must change, stop and tell me why.
+
+Build the senior-facing PWA in apps/web. This layer is LOCAL-ONLY: no
+Supabase, no auth, no Gemini, no network calls to any API. Everything must
+work offline after the first load. Features that need later layers must be
+visible but clearly labelled "Coming soon" and must not be dead buttons (they
+open an explanatory screen).
+
+## 1. Foundations
+- React Router with the screens in section 3. Mobile-first (design at 360px
+  wide), also usable on desktop.
+- Design system as Tailwind tokens + small reusable components (Button, Card,
+  RiskBadge, BigActionButton, Toggle, Banner, ScreenHeader, BottomNav). Calm
+  blue/teal palette, rounded cards, large type, minimum 48px touch targets.
+  Risk colours: green SAFE, amber BE CAREFUL, red DANGEROUS. Never rely on
+  colour alone: pair each verdict with an icon and a word.
+- Themes: light, dark, high-contrast, plus custom accent colour. Font-size
+  scale (at least 4 steps up to very large). Reduced-motion option that also
+  respects prefers-reduced-motion. Settings persist across sessions.
+- i18n: English and Malayalam with a simple typed dictionary and a language
+  switcher available on every screen. Load Noto Sans Malayalam and bundle it
+  so Malayalam renders offline. No hardcoded user-facing strings in
+  components.
+- Accessibility: semantic HTML, aria labels, visible focus, screen-reader
+  announcement of the verdict when a result appears, keyboard operable.
+- The engine runs in the browser from @safecircle/engine with the rule pack
+  bundled (no fetch needed). Wrap it in a single service
+  (src/services/scanService.ts) that every screen uses. Screens must never
+  contain detection logic.
+- DEMO_MODE flag (env + settings): when on, show a persistent banner on
+  anything simulated.
+
+## 2. Local storage and privacy
+- Use IndexedDB (via idb or Dexie). Call navigator.storage.persist() and
+  handle refusal gracefully (show a note in the Privacy screen).
+- Store: profile (name, language, accessibility prefs, optional family contact
+  name and phone number kept on this device), and Incidents using the
+  existing Incident contract. NEVER store message text, URLs or sender.
+- Only the scan result is kept; the pasted text lives in component state and
+  is cleared after the result is shown or the user leaves the screen.
+- Optional app lock: 4-6 digit PIN stored as a salted hash (WebCrypto PBKDF2),
+  set up in Settings, with a lock screen after inactivity. Make it optional and
+  easy to disable.
+- Export history as JSON and delete all local data, both with confirmation.
+- Never log message content to the console.
+
+## 3. Screens (all must work)
+1. Welcome
+2. Language selection
+3. First-time setup: name, preferred language, text size, optional family
+   contact (name + phone), optional PIN. Skippable steps; one flow, no
+   repeated interruptions.
+4. Permission explanation: PWA-appropriate only. Explain notifications (web
+   push comes in a later layer) and that "floating assistant, notification
+   screening and background protection are Android-app features". Show a
+   capability matrix (Feature | PWA | Android app later) so nothing is
+   overpromised.
+5. Senior Home: large logo, greeting ("Hello! I am SafeCircle. Send me any
+   suspicious message. I will check it for you."), huge CHECK MESSAGE button,
+   push-to-talk microphone button, status card, recent alerts (last 3), simple
+   safety overview, CALL FAMILY button (tel: link to the stored contact; if
+   none is set, prompt to add one), settings button.
+6. Message Checker: large textarea, paste button, clear button, voice input via
+   the Web Speech API where supported (ml-IN and en-IN, push-to-talk only,
+   hide the button if unsupported, show a clear mic-in-use indicator), a
+   CHECK button, loading state, error states, empty-input validation, and a
+   character limit with a friendly message.
+7. Scan Result: big verdict badge, risk score, detected tactics in plain
+   language (from the engine templates), what to do next, English and
+   Malayalam shown with the active language first and a toggle for the other.
+   Read-aloud button using speechSynthesis (hide or disable gracefully if the
+   language voice is missing and say so). Buttons: Call Family, Report Cyber
+   Fraud (opens Emergency screen), Mark as false alarm, Done. After DANGEROUS
+   or BE_CAREFUL, show a one-tap follow-up: "Did you reply, click or pay?"
+   with Yes / No / Not sure, saved as userOutcome (self-reported).
+   Show "Guardian alert will be available after you connect family (coming
+   in a later layer)" on DANGEROUS, with an honest note that no alert was
+   sent.
+8. Share-to-App handler: manifest share_target so the installed Android PWA
+   appears in the share sheet and routes to /share, pre-filling the checker
+   with shared text/URL and scanning on user confirmation. Document that this
+   works only for the INSTALLED PWA on supporting Android browsers and not on
+   iOS. Provide an in-app "How to share a message to SafeCircle" help page.
+9. Simulated Notification Feed: clearly badged "DEMO / SIMULATED", with a set
+   of at least 12 sample notifications (mix of scams and legitimate) in English,
+   Malayalam and Manglish; tapping one scans it through the same scanService.
+10. Simulated Call Scenario: banner "SIMULATED CALL SCENARIO. SafeCircle does
+    not record calls or analyse live call audio." At least 5 scripted scenarios
+    (digital arrest, fake bank KYC, fake police verification, remote-access
+    installation, emergency money request) plus paste-a-transcript. Uses the
+    same scanService and shows the tactics, score, verdict and suggested
+    response.
+11. Safety History: list of incidents with date, verdict, tactics, outcome,
+    reviewed flag; filter by verdict and date; mark reviewed; mark false
+    positive; delete one or all.
+12. Exposure & Protection Overview: add a pure module
+    packages/engine/src/exposure.ts (new, with unit tests) computing THREE
+    SEPARATE things: (a) Scam exposure level (LOW / MODERATE / HIGH / NEEDS
+    ADDITIONAL SUPPORT based on frequency and severity of attempts in the last
+    30 days), (b) Protection effectiveness (share of dangerous/careful attempts
+    where the user reported "No" to interacting, clearly labelled
+    self-reported and shown as "not enough data yet" below a minimum count),
+    (c) Risk trend (up / steady / down vs the previous period). Never combine
+    them into one number. Use gentle, non-judgmental wording; a high number of
+    scam attempts must be explained as "many scammers are targeting you",
+    never as the person being careless. Show recommendations (awareness
+    tutorial, family-assisted checking, extra support) as suggestions. Call
+    the screen "Exposure & Protection Overview", not "Vulnerability".
+13. Family: honest placeholder explaining that family linking and alerts
+    arrive in a later layer; lets the user edit the local family contact; no
+    fake connection UI.
+14. Emergency Support: National Cybercrime Helpline 1930 (tel: link),
+    cybercrime.gov.in (external link), 112 for physical emergencies. Step-by-
+    step "what to do after a suspected scam" in English and Malayalam (stop
+    contact, do not share OTP/PIN, call your bank to block cards/UPI, call 1930
+    quickly if money was lost, keep screenshots, tell your family). Do not claim
+    money can be recovered.
+15. Privacy Dashboard: what is stored locally, that nothing is sent to any
+    server in this version, which features are active, permission/capability
+    status, persistent-storage status, buttons for export and delete.
+16. Accessibility Settings and 17. Settings (language, theme, font size,
+    accent, reduced motion, PIN, DEMO_MODE, about/version/rule-pack version).
+18. Premium: informational screen showing free vs family plan, labelled "Not
+    available yet", with no payment UI.
+Navigation (bottom bar): Home, Check Message, Safety History, Family,
+Settings. Other screens are reachable from these. No button may do nothing.
+
+## 4. PWA requirements
+- Web app manifest (name, icons in required sizes, theme colour, standalone
+  display, share_target) and a service worker (vite-plugin-pwa or Workbox)
+  that precaches the app shell, rule pack, fonts and assets.
+- An offline indicator and an update-available prompt.
+- Verify the main journey works with the network disabled.
+
+## 5. Tests
+- Component/unit tests (Vitest + Testing Library): scanService wiring, i18n
+  completeness (every key exists in both languages), theme and font-size
+  persistence, the incident store (no message text ever persisted: assert this
+  with a test that scans a message and inspects every IndexedDB record), PIN
+  hash/verify, export/delete.
+- exposure.ts unit tests, including the "many attempts is not blame" wording
+  keys and the minimum-data threshold.
+- One Playwright end-to-end test of the main journey: first-time setup ->
+  paste a known scam message -> DANGEROUS result -> follow-up answer -> the
+  incident appears in History -> reload offline and scan again. Add a second
+  test for a legitimate bank OTP message returning SAFE.
+- Run an accessibility check (axe) on Home, Checker and Result.
+
+## 6. Finish
+- Update docs/ARCHITECTURE.md: decisions log, folder map, the Feature Status
+  Matrix (what is Functional, Simulated, Coming soon), the PWA platform
+  capability matrix, and known limitations.
+- Run typecheck, lint, unit tests, e2e tests and build. Fix every failure.
+- Commit with a clear message.
+
+Acceptance criteria: all commands pass; the main journey works offline; no
+message text exists anywhere in IndexedDB or logs; every visible button leads
+somewhere meaningful; every string exists in English and Malayalam; simulated
+screens are clearly labelled; no network request to any third-party API is
+made (verify in the e2e test by failing on unexpected requests).
+Notes before running it
+Malayalam UI strings: the agent will draft them, but have a Malayalam speaker review them, as with the engine templates.
+Test on a real Android phone: install the built PWA to the home screen and try the share target from WhatsApp. Emulators and desktop browsers don't behave the same way.
+Check the Exposure screen wording yourself. It's the most sensitive screen emotionally, so make sure nothing reads as blame.
+
+When this layer is done, send me what changed or broke, and I'll write Prompt 3 (Supabase auth, family linking and the anti-scam invitation safeguards).
+
+next
+
+Here's Prompt 3. It adds the first backend layer: accounts, the database, and family linking with the safeguards against the "read me your code" attack. Alert delivery and cloud AI stay in Prompt 4.
+
+PROMPT 3: Supabase backend, auth and secure family linking
+Read docs/ARCHITECTURE.md, packages/engine (types.ts and exports) and apps/web
+first. Do not change existing contracts in packages/engine/src/types.ts or
+the rule-pack schema. New modules, migrations and types are allowed. If a
+contract must change, stop and tell me why.
+
+Add the backend foundation to SafeCircle: Supabase auth, database schema with
+Row Level Security, and family linking. Alert delivery (email/Telegram/push),
+Gemini and Safe Browsing are NOT part of this layer.
+
+## 0. Non-negotiable principles
+- The app must keep working fully WITHOUT an account (local-only mode from
+  Layer 2). Signing in is optional and only unlocks family features.
+- Never store message text. Backend tables hold only the minimum fields in the
+  Incident and GuardianAlert contracts.
+- Roles are per CONNECTION, not per account. One person can be an elder in one
+  connection and a guardian in another.
+- The elder is always in control of who is connected and what is shared.
+- Service-role keys exist only in server-side functions. Never in client
+  code, never in VITE_ variables.
+- If Supabase env vars are missing, the app shows a clear "family features need
+  configuration" state and still works locally. No crashes.
+
+## 1. Database (supabase/migrations/, plain SQL, numbered, idempotent)
+Create these tables, all with RLS ENABLED and no policy that allows
+anonymous access:
+- profiles (id = auth.users.id, display_name, phone (optional), language,
+  created_at)
+- user_preferences (user_id, language, theme, font_scale, accent,
+  reduced_motion)
+- family_connections (id, elder_id, guardian_id, status: pending | active |
+  revoked, created_at, approved_at, revoked_at, revoked_by,
+  share_level: "none" | "alerts_only" | "alerts_and_summary",
+  guardian_label)
+- family_invitations (id, elder_id, token_hash (never store the raw token),
+  expires_at, used_at, used_by, attempts, created_at)
+- scam_incidents (id, elder_id, scanned_at, score, verdict, category,
+  detection_method, reviewed, false_positive, user_outcome, rule_pack_version;
+  NO message text, NO url, NO sender)
+- scam_indicators (id, incident_id, signal_id)
+- guardian_alerts (id, incident_id, elder_id, guardian_id, status: pending |
+  delivered | seen | reviewed, created_at, seen_at, reviewed_at)
+- notification_preferences (guardian_id, elder_id, channel flags: in_app,
+  email, telegram, push; quiet hours optional)
+- device_settings (user_id, platform, settings jsonb limited to non-sensitive
+  keys)
+- subscription_plans (id, code: "free" | "family", features jsonb)
+- user_subscriptions (user_id, plan_id, status, period_end)
+- connection_audit_log (id, connection_id or elder_id, actor_id, action:
+  invited | redeemed | approved | revoked | share_level_changed |
+  invite_failed, created_at). Elders can read the log for their own account.
+Add sensible indexes and CHECK constraints (score 0-100, valid verdicts, valid
+statuses). Add a trigger that creates a profiles row on signup.
+
+## 2. RLS policies
+- Use SECURITY DEFINER helper functions with a fixed search_path (for example
+  is_active_guardian_of(elder uuid)) to avoid recursive-policy problems.
+- profiles/preferences/device_settings: owner only.
+- scam_incidents/scam_indicators: the elder can read/write their own; a
+  guardian can SELECT only if an ACTIVE connection exists AND share_level
+  allows it. Guardians never write incidents.
+- family_connections: visible to the elder and guardian of that row only. The
+  elder can approve/revoke/change share_level. The guardian can only revoke
+  (unlink) themselves.
+- family_invitations: the elder can insert and read their own; no direct
+  client access to redeem (redeeming goes through an Edge Function).
+- guardian_alerts: readable by that guardian and the elder; the guardian can
+  update status only.
+- subscription tables: owner read; no client writes.
+- Write SQL-level RLS tests (pgTAP, or a documented test script using two
+  test users and a third unrelated user) proving: cross-family reads fail, a
+  revoked guardian loses access immediately, a pending connection grants no
+  access, a guardian cannot read incidents with share_level "none", and
+  anonymous users get nothing.
+
+## 3. Edge Functions (supabase/functions/, TypeScript/Deno)
+Each validates input with zod, checks the JWT, returns generic errors, never
+logs tokens or personal data.
+- create-invitation: elder only. Generates a cryptographically random token,
+  stores only its hash, expiry 15 minutes, single use. Returns the raw token
+  (shown once as a code AND a QR payload). Limit active invitations per elder
+  to 1 (creating a new one invalidates the old one).
+- redeem-invitation: guardian submits the code. Rate-limit by user and IP
+  (for example 5 attempts per 15 minutes) and increment the attempts counter;
+  lock the invitation after 5 failed tries. Constant-time hash comparison. On
+  success create a PENDING family_connection (not active) and an audit entry.
+  Never reveal whether a code existed, was expired, or was used (one generic
+  error).
+- approve-connection: elder only. Moves pending -> active and sets share_level
+  chosen by the elder. Records an audit entry.
+- revoke-connection: elder or guardian. Immediate effect.
+- update-share-level: elder only.
+- get-entitlements: returns what the user's plan allows (see section 6).
+- sync-incident: elder only, requires an active connection with a share level
+  that allows it, and the user's explicit sync consent. Accepts only the
+  Incident contract fields; rejects any extra field or any string field that
+  looks like free text longer than the category limit. Creates incident and
+  indicator rows.
+Add shared helpers for validation, rate limiting (a small table or Supabase
+KV-style table), CORS limited to the configured app origin, and consistent
+error shapes.
+
+## 4. Client features (apps/web)
+- Auth: email sign-up/sign-in with magic link AND password option. Keep the
+  forms very simple and large for seniors. Session persists. Clear error and
+  loading states. No SMS or phone OTP login.
+- "Optional account" flow: from the Family screen, "Connect My Family"
+  explains benefits in plain language and asks the elder to sign in first.
+- Elder flow: generate an invitation (code + QR, with a visible 15-minute
+  countdown), see pending requests with the guardian's NAME and PHONE if
+  provided, and a prominent warning in English and Malayalam: "Only approve
+  someone you know personally. Never read this code to someone who phoned or
+  messaged you." Approve or Reject, choose what is shared (alerts only /
+  alerts and summary / nothing), view connected family, unlink anyone, and
+  view the connection audit log in plain language.
+- Guardian flow: enter code or scan the QR (use a QR scanner library over
+  getUserMedia with camera permission requested only on tap), wait for
+  approval, then see an empty-state guardian shell (the full dashboard is the
+  next layer). The role mode switch (Normal / Guardian) appears only if the
+  user has at least one active elder connection.
+- New-link notification: when a connection becomes active, existing
+  guardians of that elder get an in-app notification row (use guardian_alerts
+  or a small notifications table, document the choice).
+- Sync consent: a clear per-connection toggle in the Privacy Dashboard, off
+  by default, listing exactly which fields sync. After consent, a sync queue
+  stores incidents locally and uploads them when online, with retry and
+  dedupe by incident id. No message text is ever queued.
+- Privacy Dashboard updated to show what is now sent to the server, to whom,
+  and a "stop sharing and delete synced data" action (server-side deletion
+  via a function).
+- Keep the Layer 2 local-only behaviour intact when signed out or offline.
+
+## 5. Guardian-assisted setup (safe version)
+Add an optional "Set up with a family member" screen on the elder's device:
+the family member can help create the account and choose settings while
+sitting with them, but the connection still follows the same invite and
+elder-approval flow. Do not create any path where a guardian can create or
+control an elder's account remotely.
+
+## 6. Subscription and entitlements (no payments)
+- Seed subscription_plans: "free" and "family".
+- Free: local detection, history, ONE active guardian connection WITH alerts
+  (family safety must not be paywalled for a single guardian).
+- Family: multiple elder profiles per guardian, extended analytics,
+  reports, advanced settings (enforced in later layers).
+- Implement a server-side entitlement check in get-entitlements and a client
+  hook useEntitlements(). Enforce the one-guardian limit for free users in
+  approve-connection. Do not add any payment UI or fake checkout.
+
+## 7. Configuration and docs
+- Update .env.example (client vars: URL and anon key only; server secrets
+  stay in the functions environment).
+- docs/BACKEND_SETUP.md: step-by-step Supabase project creation (recommend the
+  Mumbai / ap-south-1 region for Indian users), running migrations, deploying
+  functions, setting secrets, configuring auth redirect URLs for local and
+  Vercel, and a clearly stated warning that free-tier Supabase projects pause
+  after inactivity and that this must change for production.
+- docs/SECURITY_NOTES.md: threat model summary (invite-code social
+  engineering, guardian misuse, token handling, RLS assumptions, what is and
+  is not logged), plus a short data-protection note listing the data
+  collected, purpose, retention, and deletion path, marked "to be reviewed by
+  a legal professional (India DPDP Act 2023)".
+- Update docs/ARCHITECTURE.md: decisions log, schema overview, function list,
+  Feature Status Matrix (mark what needs real Supabase configuration).
+
+## 8. Tests
+- RLS tests from section 2 run in CI/locally with documented commands.
+- Edge Function tests: expired code, reused code, wrong code, rate limit
+  triggers, lockout after repeated failures, elder-only enforcement, free-plan
+  one-guardian limit, sync rejects free-text fields.
+- Client tests: sign-in forms, sync queue (offline -> online, retries,
+  no message text in queued payloads), role-mode switch visibility.
+- Playwright e2e using a local Supabase stack (supabase start) or mocked
+  functions where that is not possible, covering: elder creates a code ->
+  guardian redeems -> elder approves -> link active -> elder revokes -> the
+  guardian loses access.
+- Re-run all Layer 1 and Layer 2 tests; nothing may regress.
+
+## 9. Finish
+Run typecheck, lint, all tests and the build. Fix every failure. Commit.
+List in the final message exactly which parts need real Supabase credentials
+to run and which were verified locally.
+
+Acceptance criteria: the app still works fully without an account; RLS tests
+prove no cross-family access; raw invitation tokens are never stored or
+logged; a redeemed invitation creates only a pending connection until the
+elder approves; the elder sees the guardian's identity and the warning before
+approving; revoking removes guardian access immediately; no service-role key
+appears in the client bundle (add a build check that greps the output).
+Notes before running it
+You need a Supabase project first. Create one in the Mumbai region and keep the URL and keys ready. The agent can't create the account for you.
+Test the invite flow with two real devices or browser profiles. Use one as the elder and one as the guardian, and try the "read me your code" scenario with a friend to see whether the warning is clear enough.
+Ask the agent to show you the RLS test results, not just say they pass. Cross-family access is the one thing in this layer that must not fail.
+Free-tier note: this is fine for your demo and college submission, but the pause-after-inactivity behaviour matters before real users rely on it.
+
+Next is Prompt 4: the guardian dashboard, the alert pipeline (in-app, email, Telegram, web push) and optional cloud explanations with Gemini and Safe Browsing. Send any problems from this layer first, or just say "next".
+
+next
+
+Thought for 14s
+
+Drafting the guardian dashboard alert pipeline prompt.
+
+Weighing security and privacy safeguards for the alert pipeline.
+
+Weighing privacy-preserving lookups and alert delivery options.
+
+Here's Prompt 4. It adds the guardian dashboard, the alert pipeline, and optional cloud help. The main design rule is that cloud services can add information or raise a warning, but they can never lower a verdict and are never needed for a scan.
+
+PROMPT 4: Guardian dashboard, alert pipeline and optional cloud assist
+Read docs/ARCHITECTURE.md, docs/SECURITY_NOTES.md, packages/engine (types.ts,
+exports, exposure.ts), apps/web, and supabase/ (migrations, functions) first.
+Do not change existing contracts in packages/engine/src/types.ts or the
+rule-pack schema. New modules, migrations, functions and types are allowed. If
+a contract must change, stop and tell me why.
+
+Build (A) the guardian dashboard, (B) the family alert pipeline, and (C)
+optional cloud assist (Gemini explanations and Safe Browsing). Use Supabase
+Edge Functions for all server work (same as Layer 3).
+
+## 0. Principles (non-negotiable)
+- The local engine is always the source of truth. Cloud results may ADD
+  information or RAISE a verdict. They can NEVER lower a verdict or score.
+- Cloud features are OFF by default, require explicit opt-in, and can be
+  disabled at any time. With cloud disabled or unreachable, every scan still
+  works exactly as in Layer 2.
+- No message text is ever sent to any third party. Gemini receives only
+  {signalIds, verdict, language}. Safe Browsing receives only a normalised URL
+  (see section 6) and only with consent.
+- Alerts contain tactic names and a verdict, never the message.
+- Every server function requires auth, validates input with zod, enforces
+  per-user quotas, and never logs tokens, URLs or message content.
+- All missing credentials must produce a clear "needs configuration" state
+  and a documented dev fallback (console email, mock push), never a crash.
+
+## 1. Alert pipeline (server)
+Migrations:
+- alert_deliveries (id, alert_id, channel: in_app|email|telegram|push, status:
+  queued|sent|failed|skipped, attempts, next_attempt_at, last_error_code (no
+  PII), sent_at)
+- telegram_links (guardian_id, chat_id, link_token_hash, linked_at)
+- push_subscriptions (user_id, endpoint, keys, created_at, last_seen_at)
+- alert_escalations (alert_id, escalated_at, to_guardian_id)
+- cloud_usage (user_id, day, gemini_calls, safe_browsing_calls)
+- explanation_cache (key = hash of sorted signalIds + verdict + language,
+  text, created_at)
+- Add columns where needed: user_preferences.cloud_explanations_enabled
+  (default false), user_preferences.cloud_url_check_enabled (default false),
+  notification_preferences additions (include_elder_name bool, quiet_hours,
+  dangerous_bypasses_quiet_hours default true, escalation_minutes default 15).
+RLS on everything; follow the Layer 3 helper-function pattern.
+
+Flow:
+1. When sync-incident stores an incident with verdict DANGEROUS (and
+   BE_CAREFUL only if the guardian opted in), it creates guardian_alerts for
+   every ACTIVE connection whose share_level allows it, plus queued
+   alert_deliveries per channel the guardian enabled.
+2. Dedupe: if an alert with the same elder and the same sorted signal set
+   exists within the last 30 minutes, attach to it instead of creating a new
+   one (avoid alert fatigue).
+3. A scheduled worker function (pg_cron or Supabase scheduled function)
+   processes queued deliveries with exponential backoff (max 5 attempts) and
+   records status per channel. Document how to schedule it.
+4. Escalation: if an alert is not "seen" within the guardian's
+   escalation_minutes, resend through the next enabled channel, and if the
+   elder has another active guardian, notify them too. Record in
+   alert_escalations.
+5. Channels:
+   - in_app: realtime via Supabase Realtime plus a notifications list.
+   - email: provider abstraction (EmailProvider interface). Implement one
+     real provider adapter (for example Resend) and a console adapter for dev.
+     Plain-language templates in English and Malayalam based on the
+     guardian's language.
+   - telegram: bot with deep-link linking (/start <one-time token>) so the
+     guardian opts in; store only chat_id; message includes verdict, tactic
+     names, elder's name only if include_elder_name is true, suggested action,
+     and 1930 / cybercrime.gov.in for fraud scenarios. No message content.
+   - web push: VAPID. Service worker push handler with one-tap actions where
+     the platform supports them (Call, View details, Mark reviewed). Document
+     that iOS requires the PWA to be installed, and that native Android push
+     (FCM) arrives in Layer 5.
+6. Delivery transparency: the ELDER can see, in plain language, that an alert
+   was sent, to whom, over which channel, and whether it was delivered. No
+   hidden alerts.
+7. Never auto-contact police or submit complaints. "Report cyber fraud" only
+   opens the official info with a confirmation step.
+
+## 2. Guardian dashboard (apps/web)
+Role-aware navigation (Dashboard, Family Members, Alerts, Scam Analytics,
+Settings) using the same design system, themes, fonts and i18n as the senior
+UI. Mode switch between Normal and Guardian modes as built in Layer 3.
+Screens:
+1. Guardian Home: cards per connected senior (name, protection status, last
+   alert, exposure level), high-risk alert banner, quick actions.
+2. Family Members: list, per-person detail, what that person shares (reflects
+   share_level), unlink, request a share-level change (elder decides).
+3. Alerts: list with filters (verdict, date, status), unseen badge.
+4. Alert Details: verdict, tactics in plain language (en/ml), suggested
+   actions, delivery info, and the one-tap actions: CALL FAMILY MEMBER (tel:
+   link from the elder's shared phone or the guardian's label, if available),
+   MARK AS REVIEWED, VIEW DETAILS, REPORT CYBER FRAUD (confirmation step).
+5. Scam Analytics: built from synced incidents only, using the existing
+   exposure.ts module: exposure level, protection effectiveness (labelled
+   self-reported, with a minimum-data threshold), risk trend, scam-type
+   breakdown, date-wise timeline, date-range filter, printable/exportable
+   summary report (PDF or print stylesheet). Wording stays non-judgmental and
+   offers recommendations, never labels the senior as careless.
+6. Guardian Settings: notification channels per elder, quiet hours,
+   escalation time, telegram linking, push enablement, include-elder-name
+   toggle, language, a clear explanation of what each channel reveals.
+7. Emergency/help screen reused from Layer 2.
+Entitlements: free plan = one elder with alerts and basic dashboard; family
+plan features (multiple elders, extended analytics, reports) show a clear
+"not available on your plan" state using useEntitlements() (no payment UI).
+Empty, loading and error states everywhere. Realtime updates for new alerts.
+
+## 3. Cloud assist: Gemini explanations
+Edge function explain-scan:
+- Requires auth. Checks user_preferences.cloud_explanations_enabled; if off,
+  returns 403 with a "disabled" code.
+- Input schema: { signalIds: SignalId[], verdict, language }. Reject anything
+  else, including any extra field or long strings.
+- Checks the per-user daily quota (configurable, conservative default) and
+  caches by explanation_cache key. Serve the cache first.
+- Calls Gemini with a fixed system instruction that asks for a short,
+  simple, kind explanation for an elderly reader in the requested language,
+  using ONLY the supplied tactic names, with structured JSON output. Model
+  name comes from an env var (GEMINI_MODEL), never hardcoded.
+- Validates the output with zod, caps length, strips markup, rejects output
+  that contradicts the verdict (for example telling the user it is safe when
+  the verdict is DANGEROUS). On any failure or timeout (hard timeout, a few
+  seconds) return the local template explanation instead.
+- Never returns a verdict or score.
+Client: a "Get a simpler explanation" button on the result screen, shown only
+if the user enabled it. Result is labelled HYBRID (local rules + cloud
+wording). A first-time consent screen in English and Malayalam says exactly
+what is sent (tactic names only, no message), and that the free Gemini tier
+may have different data-use terms than paid tiers: tell me to review the
+current terms and put a note in docs/SECURITY_NOTES.md.
+
+## 4. Cloud assist: Safe Browsing
+Edge function check-url:
+- Requires auth and cloud_url_check_enabled. Quota per user per day.
+- Input: a list of up to 5 URLs extracted by the engine. Normalise each (strip
+  query string and fragment, lowercase host, reject non-http(s), reject
+  private/loopback/link-local IPs and internal hostnames).
+- Do NOT fetch or follow redirects in this layer (no server-side URL
+  fetching, so no SSRF surface). Shortened links are only flagged by local
+  rules; note redirect expansion as a future, hardened feature.
+- Prefer the privacy-preserving hash-prefix approach if the current Safe
+  Browsing API version supports it; otherwise use the Lookup API. Check the
+  current API terms (including any non-commercial restriction and quota) and
+  record what you found in docs/SECURITY_NOTES.md. Provider is hidden behind a
+  UrlReputationProvider interface with a mock for dev.
+- Client: after the local scan, if cloud URL check is enabled and URLs exist,
+  call check-url and, if a URL is flagged, apply the result through a NEW
+  engine module packages/engine/src/externalSignals.ts:
+  applyExternalSignals(result, externalSignals, pack) which can only raise the
+  score/verdict, re-runs override logic, appends an indicator
+  (SUSPICIOUS_URL with a distinct matchedRuleId such as "ext:safe_browsing"),
+  and sets detectionMethod to HYBRID. Unit-test that it never lowers anything
+  and that an unreachable service leaves the local result untouched.
+- Privacy dashboard shows this as a separate, plainly worded toggle.
+
+## 5. Abuse and security controls
+- Per-user and per-IP rate limiting on every new function; payload size
+  limits; CORS limited to the app origin; generic error messages.
+- Pin down the logging policy: log function name, status and error code only.
+- Secrets only in function env vars; add the build-output check from Layer 3
+  and extend it to the new keys.
+- Update docs/SECURITY_NOTES.md with threat notes: alert spoofing, guardian
+  misuse, quota exhaustion, notification content leakage across channels, and
+  third-party data flows (Telegram, email provider, Google) with what each
+  receives.
+
+## 6. Tests
+- RLS tests extended: a guardian cannot read alerts or deliveries of a family
+  they are not actively connected to; revoked guardians receive no new alerts;
+  elders can read delivery status of their own alerts.
+- Alert pipeline tests: DANGEROUS creates alerts for all eligible guardians;
+  BE_CAREFUL only for guardians who opted in; dedupe window; quiet hours with
+  the dangerous bypass; retry/backoff; escalation after N minutes; free-plan
+  limit respected; offline-queued incident alerts when synced later; no
+  message text in any stored row or outgoing payload (assert on every channel
+  adapter's payload).
+- explain-scan tests: disabled by default, quota, cache hit, schema rejection
+  of extra fields, fallback to the template on Gemini failure/timeout/invalid
+  output, rejection of contradictory output, never returns a verdict.
+- check-url tests: SSRF-style inputs rejected, query strings stripped,
+  provider failure leaves the local result unchanged, quota.
+- externalSignals unit tests (never lowers, idempotent, sets HYBRID).
+- Client tests for guardian role-aware navigation, entitlements gating, the
+  alert details actions, and the consent screens.
+- Playwright e2e (mock providers): elder scans a known scam -> incident syncs
+  -> guardian receives an in-app alert -> opens details -> marks reviewed ->
+  elder sees the delivery status. Plus a Gemini-unavailable scenario where the
+  scan result still appears normally.
+- Re-run all earlier tests; nothing may regress.
+
+## 7. Documentation and finish
+- docs/ALERTS_AND_CLOUD_SETUP.md: how to create the Telegram bot, set VAPID
+  keys, configure the email provider, get Gemini and Safe Browsing keys, set
+  function secrets and schedule the worker, with free-tier limits stated as
+  "check the provider's current limits".
+- Update docs/ARCHITECTURE.md (decisions, function list, data-flow diagram in
+  text/mermaid showing exactly what leaves the device), the Feature Status
+  Matrix, and .env.example.
+- Run typecheck, lint, all tests and the build. Fix every failure. Commit.
+- In the final message, list which channels were verified with real
+  providers and which only with mocks.
+
+Acceptance criteria: with all cloud features off, behaviour equals Layer 2/3;
+cloud assist can never lower a verdict; no message text appears in any
+database row, log, or outgoing payload; alerts reach guardians through at
+least the in-app channel end to end; the elder can see exactly what was sent
+to whom; dedupe, retry and escalation are tested; no secret appears in the
+client bundle.
+Notes before running it
+Credentials to prepare: a Telegram bot token (from BotFather), an email provider key, VAPID keys (the agent can generate these), and Gemini and Safe Browsing keys. You can run the whole layer on mocks first and add real keys one at a time.
+Check the Safe Browsing terms yourself. The agent will report what it found, but usage restrictions and API versions change. Confirm the non-commercial point before any real launch.
+Test alert timing with a real phone. Delivery, push behaviour, and Malayalam rendering in Telegram and email are easy to get subtly wrong, so send a few real test alerts and read them as a family member would.
+The Malayalam email and Telegram templates also need native review.
+
+Next is Prompt 5: Android native layer (Capacitor, share intents, FCM push, foreground service, floating assistant, notification listener, and a Kotlin port of the engine that passes the same conformance vectors). Say "next" when you're ready. That layer is the hardest, so I'd suggest splitting it into 5A and 5B, and I'll do that when we get there.
+
+next
+
+Here's Prompt 5A. I split the Android layer in two as promised. 5A covers the Android app shell, the Kotlin engine, share intents, push, and permissions. 5B will cover the background service, floating assistant, notification screening, and wake word. The Kotlin engine comes first because everything in 5B depends on it.
+
+PROMPT 5A: Android shell, Kotlin engine, share intent, push and permissions
+Read docs/ARCHITECTURE.md, docs/SECURITY_NOTES.md, packages/engine (types.ts,
+exports, rulepacks/in-v1.json, tests/conformance/vectors.json), apps/web and
+supabase/ first. Do not change existing contracts in
+packages/engine/src/types.ts or the rule-pack schema. New modules, plugins,
+migrations and types are allowed. If a contract must change, stop and tell me
+why.
+
+Build the Android foundation for SafeCircle using Capacitor for the UI and
+native Kotlin for everything that must run outside the WebView. This layer
+(5A) does NOT include the floating overlay, foreground protection service,
+notification listener or wake-word detection. Those are Layer 5B. But 5A must
+leave clean extension points for them.
+
+## 0. Principles
+- The PWA keeps working unchanged. Android-only code lives in android/ and in
+  a small Capacitor plugin layer. Web code detects the platform through ONE
+  module (src/platform/capabilities.ts) and never scatters Capacitor checks.
+- The Kotlin engine must produce the SAME results as the TypeScript engine,
+  proven by the shared conformance vectors. The rule pack is data and is the
+  single source of truth: never hardcode rules in Kotlin.
+- Do not make unsupported claims. Anything Android or the device maker can
+  block must be described honestly in the UI and docs.
+- No message text in logs, crash output, Android backups or notifications.
+- Distribution assumption for now: sideloaded debug/release APK for demo and
+  testing. Document that Google Play has strict policies for overlay,
+  notification-listener and accessibility-style features, and that a Play
+  release needs a separate policy review (Layer 6 task).
+
+## 1. Capacitor setup
+- Add Capacitor (core, android) to apps/web. appId such as
+  com.safecircle.app (make it configurable), appName SafeCircle, webDir =
+  the Vite build output. Bundle web assets inside the APK (no remote
+  server.url) so the app works fully offline.
+- Handle the service worker sensibly inside Capacitor (disable or scope it
+  where it conflicts, and document the decision).
+- Scripts at the root: android:sync, android:build:debug, android:open.
+- Edge-to-edge and safe-area handling, status bar colour from the active
+  theme, hardware back button behaviour consistent with React Router, splash
+  screen. Lock nothing about orientation unless it breaks layouts.
+- Android manifest hardening: allowBackup=false (or explicit backup/data
+  extraction rules that exclude the database and preferences),
+  usesCleartextTraffic=false, exported flags set explicitly, minimal
+  permissions only. Choose minSdk and targetSdk based on the CURRENT Google
+  Play and Android requirements (check them, record them in the docs).
+  Enable R8/ProGuard for release with keep rules where needed.
+
+## 2. Kotlin engine (android/native/engine, a pure Kotlin/JVM module)
+Create a Gradle module with NO Android dependencies so it can be unit-tested
+on the JVM and reused by services in 5B.
+- Public API mirrors the TS engine: scan(input, pack) -> ScanResult, plus
+  loadRulePack(json), validateRulePack, getVersion. Data classes mirror
+  types.ts exactly (same field names, same enum values, JSON-serialisable
+  with kotlinx.serialization).
+- Implement the same pipeline: normalisation (NFKC via java.text.Normalizer,
+  zero-width stripping, Malayalam chillu/ZWJ/ZWNJ normalisation, homoglyph
+  and digit mapping, spaced-letter collapsing, Malayalam/Devanagari digit
+  handling, URL/domain extraction), rule evaluation with per-signal
+  de-duplication, LEGIT_CONTEXT negative signal, additive score with cap,
+  overrides that only raise, thresholds, bilingual templates, determinism.
+- REGEX PORTABILITY: JavaScript and Java regex dialects differ (lookbehind,
+  named groups, Unicode classes, flags, \b semantics on non-Latin text).
+  Add a rule-pack linter script in packages/engine (TypeScript, new module)
+  that fails if any regex uses a construct outside an agreed portable
+  subset, document that subset, and run it in the engine tests. If a
+  conformance mismatch is caused by dialect differences, FIX THE RULE (make
+  it portable) and keep both implementations passing. Never add
+  Kotlin-only special cases for individual rules.
+- Same ReDoS safety: enforce a per-scan time budget and input length cap in
+  Kotlin as well, with a defined safe result (not a crash) when exceeded.
+- Load the rule pack from an asset copied at build time from
+  packages/engine/rulepacks (a Gradle task copies it so there is only one
+  source). Expose getVersion() so web and native can show the same pack
+  version.
+- JVM unit tests (JUnit):
+  a) Conformance runner: reads tests/conformance/vectors.json and asserts
+     verdict, sorted signalIds and minimum score for every vector. Print a
+     summary and the list of any failing vector ids.
+  b) Normaliser parity tests with tricky Malayalam, Manglish, spaced-letter
+     and homoglyph strings, with expected outputs generated from the TS
+     normaliser (generate a shared normalisation vectors file from TS and
+     commit it).
+  c) Privacy test: serialised result must not contain input text.
+  d) Determinism, override-never-lowers, score cap, time-budget tests.
+  e) Performance sanity check on a 2,000-character message.
+- Target: ZERO conformance failures. If a vector cannot pass for a
+  documented reason, list it explicitly in docs/ENGINE_REPORT.md and
+  explain; do not silently skip or edit vectors to make them pass.
+
+## 3. Capacitor plugin "SafeCirclePlugin" (Kotlin, in android/native)
+Methods exposed to the web layer:
+- scan({ text, source }) -> ScanResult using the Kotlin engine (used for
+  parity checks and by native screens later; the web UI may keep using the TS
+  engine but must be able to switch via a setting for testing).
+- getCapabilities() -> structured status of each Android feature
+  (notifications, microphone, overlay, notification listener, battery
+  optimisation exemption, exact alarms not needed) with fields: granted,
+  canRequest, needsSystemSettings.
+- requestNotificationPermission(), requestMicrophonePermission() (runtime
+  permissions, contextual, only on user tap).
+- openSettings(target) for: app notification settings, overlay permission,
+  notification-listener access, battery optimisation, app details. Use the
+  correct system intents and fall back to app details if a screen is missing
+  on a device.
+- getAppInfo() (version, rule pack version, OS version, manufacturer).
+- Incident storage bridge (see section 5).
+Keep the plugin interface typed in TypeScript and add a web fallback
+implementation (returns "unsupported") so the PWA still builds and tests run.
+
+## 4. Native share intent
+- Register an intent filter for ACTION_SEND text/plain (and ACTION_PROCESS_TEXT
+  if sensible) so SafeCircle appears in the Android share sheet and the
+  selected-text menu.
+- Handle cold start, warm start and singleTask/new-intent cases. Pass the
+  shared text to the web layer through the plugin and route to /share, with
+  the same confirm-then-scan UX as Layer 2. Clear the intent extras after
+  handling so the text is not reprocessed or kept.
+- Limits: do not claim access to private WhatsApp content. Only what the user
+  explicitly shares is received. Add this wording to the help page.
+- Size cap on received text and safe handling of malformed or huge shares.
+
+## 5. Local incident storage abstraction (prepares 5B)
+- Introduce an IncidentStore interface in apps/web (get/list/add/update/
+  delete/exportAll/deleteAll) with the existing IndexedDB implementation and a
+  new AndroidIncidentStore that talks to a native Room database through the
+  plugin. Use the existing Incident contract; NO message text, URLs or senders
+  are ever stored.
+- Room schema mirrors Incident; migrations versioned; encrypt at rest where
+  practical (document the choice; do not roll your own crypto).
+- On Android, the app uses the native store so that incidents detected by
+  native services in 5B appear in the same History and Exposure screens.
+  Provide a one-time import of any existing IndexedDB incidents on first
+  Android launch.
+- Keep the sync queue and consent logic from Layer 3 working with whichever
+  store is active.
+
+## 6. Native push (FCM) integration
+- Add Firebase Cloud Messaging via the Capacitor push-notification
+  mechanism (or native FirebaseMessagingService), with google-services.json
+  supplied by me and listed in .gitignore; the build must still succeed and
+  show "push needs configuration" when it is absent.
+- Notification channels: "Family alerts" (high importance, for DANGEROUS),
+  "Safety tips and info" (default/low), created at startup. Users can change
+  them in system settings.
+- Runtime notification permission (Android 13+) requested contextually: when
+  the user enables alerts, not at first launch.
+- Token handling: register the token with a Supabase function (new migration
+  and function register-device-token, upsert into a device_tokens table with
+  RLS, remove on sign-out/unlink). Add an 'fcm' channel to alert_deliveries
+  (migration) and extend the Layer 4 delivery worker with an FCM HTTP v1
+  sender behind a PushProvider interface (mock for dev). Prune invalid tokens
+  when FCM reports them as unregistered.
+- Notification payloads contain verdict, tactic names, alert id and
+  deep link only. Never message text. Tapping opens Alert Details; action
+  buttons (CALL, MARK REVIEWED) where Android allows. Lock-screen visibility
+  set so sensitive details are hidden until unlocked (private visibility with
+  a public version showing a generic "SafeCircle alert").
+
+## 7. Permission manager UI (apps/web, Android build)
+- A "Protection Setup" screen reachable from Settings and from first-time
+  setup (one clear sequence, skippable, never blocks scanning):
+  notifications (works in 5A), microphone for push-to-talk (works in 5A),
+  battery optimisation guidance (works in 5A, with manufacturer-specific
+  tips for common Indian OEMs such as Xiaomi, Oppo, Vivo, Samsung, Realme,
+  OnePlus, shown as best-effort guidance because the steps vary), overlay
+  and notification-listener rows (status detection works, but the features
+  themselves arrive in 5B and the rows say "Available in the next update").
+- Re-check statuses on app resume so the screen reflects changes the user
+  made in system settings.
+- Every optional permission can be refused or revoked without breaking
+  anything else. Show only the affected feature as off, with a plain
+  explanation in English and Malayalam.
+- Update the Privacy Dashboard with the real permission states and the new
+  data flows (FCM token, native storage).
+- Update the capability matrix (PWA vs Android app) to match reality.
+
+## 8. Build, signing and docs
+- Gradle build must succeed with ./gradlew assembleDebug (and lint). Document
+  the exact prerequisites (JDK, Android SDK, build tools) in
+  docs/ANDROID_BUILD.md, including how to create a debug and a release
+  keystore (never commit keystores or passwords), how to install via adb,
+  and how to enable installing from unknown sources.
+- Document known sideloading hurdles (for example the "restricted
+  settings" prompt on newer Android versions for certain permissions) as
+  things to check on a real device, stating that they were not verified if
+  you could not test on one.
+- Update docs/ARCHITECTURE.md (decisions, module map, data flows, Feature
+  Status Matrix) and .env.example for any new variables.
+
+## 9. Tests and verification
+- JVM: conformance, normaliser parity, privacy, determinism (section 2).
+- TypeScript: plugin fallback behaviour, platform capability module,
+  IncidentStore contract tests run against BOTH implementations (the Android
+  one with a mock plugin), regex portability linter, and all earlier suites.
+- Android instrumented/UI tests are welcome if an emulator is available. If
+  you cannot run an emulator or device, say so clearly and list exactly which
+  behaviours remain UNVERIFIED on a real device (share intent, push delivery,
+  permission screens, OEM behaviour).
+- Run typecheck, lint, all tests, the web build, cap sync and
+  ./gradlew assembleDebug. Fix every failure. Commit.
+
+Acceptance criteria: the Kotlin engine passes every conformance vector (or
+each exception is documented honestly); the APK builds and bundles the web
+app and the rule pack from a single source; sharing text from another app
+opens SafeCircle's checker with the text pre-filled and nothing is stored
+until the user scans, and only the Incident fields are stored after; FCM
+absence degrades gracefully; denying any permission disables only that
+feature; no message text appears in logs, backups, notifications or storage;
+the PWA still passes all earlier tests.
+Notes before running it
+Set-up you'll need: Android Studio (or the SDK and JDK on the command line), a Firebase project with an Android app registered (for google-services.json), and ideally a real Android phone. Emulators won't show OEM battery-killer behaviour or share-sheet quirks.
+The conformance result is the main thing to check. Ask the agent to show you the Kotlin test output. If it reports exceptions, read why. They usually point to a rule that isn't portable between JavaScript and Java regex, and the right fix is changing the rule, not the test.
+Test the share intent yourself from WhatsApp, SMS, and Chrome, on a cold start (app fully closed) and a warm one.
+FCM and Malayalam notification text should be checked on a real device, since fonts and truncation differ from the web.
+
+Next is Prompt 5B: the foreground service, floating assistant overlay, notification listener, and wake word. It's the riskiest layer for Android policy and device quirks, so I'll build in feature flags, a clear fallback for each piece, and honest limitations. Say "next" when 5A works.
+
+next
+
+Thought for 14s
+
+Drafting the foreground service and overlay prompt.
+
+Checking Android 14 foreground service rules and permissions.
+
+Reviewing notification listener and overlay permission design.
+
+Here's Prompt 5B. This is the riskiest layer for Android policy and device behaviour, so every piece has a feature flag, a graceful fallback, and an honest status display. Wake-word is the most uncertain part, so push-to-talk is the guaranteed path and wake-word is optional.
+
+PROMPT 5B: Foreground protection, floating assistant, notification screening, voice
+Read docs/ARCHITECTURE.md, docs/SECURITY_NOTES.md, docs/ANDROID_BUILD.md,
+docs/ENGINE_REPORT.md, android/ (the Kotlin engine module, SafeCirclePlugin,
+Room incident store), and apps/web first. Do not change existing contracts in
+packages/engine/src/types.ts or the rule-pack schema. New modules, plugin
+methods and migrations are allowed. If a contract must change, stop and tell
+me why.
+
+Build the Android-only background protection features on top of Layer 5A:
+(A) protection foreground service with user controls, (B) floating assistant
+overlay, (C) opt-in notification screening, (D) voice interaction. Everything
+uses the shared Kotlin engine and the shared Room incident store. Nothing here
+may be required for basic scam checking.
+
+## 0. Principles (non-negotiable)
+- Every feature is OPT-IN, off by default, individually switchable, and has a
+  build-time kill switch (BuildConfig flags) so any piece can be shipped or
+  removed independently.
+- Honesty: never claim guaranteed always-on protection. Android and device
+  makers can stop services. The app must DETECT and DISPLAY when protection is
+  not actually running, and tell the user how to fix it.
+- Privacy: process text locally, never store message or notification text,
+  never log it, never upload it, never record or store audio. Only the
+  Incident contract fields are persisted (same rules as before).
+- Revoking any permission disables only the affected feature. Basic checking
+  always keeps working.
+- No Accessibility Service, no screen reading, no SMS-read permission, no
+  call-log or phone-state permissions, no call recording. State this in the
+  docs. Do not add permissions that are not needed.
+- Do not auto-request battery-optimisation exemption in a way that violates
+  Google Play policy. Offer guidance and a link to system settings only.
+- Check CURRENT Android behaviour and Google Play policy (foreground service
+  types, background start restrictions, overlay and notification-listener
+  policy, boot-receiver limits, microphone use) and record what you found and
+  the sources in docs/ANDROID_POLICY_NOTES.md. Where my instructions below
+  conflict with current platform rules, follow the platform and tell me.
+
+## 1. Protection controller and foreground service
+Create a ProtectionController (plain Kotlin class, unit-testable) holding the
+state machine and persisted settings (use DataStore):
+- Settings: protectionEnabled, floatingAssistantEnabled,
+  notificationScreeningEnabled, voiceEnabled, wakeWordEnabled (default false),
+  pauseUntil (timestamp or null), notificationPackageAllowlist.
+- State: RUNNING, PAUSED (with resume time), STOPPED_BY_USER,
+  NEEDS_PERMISSION(feature), STOPPED_BY_SYSTEM_SUSPECTED.
+- Actions: enable, disable, pause (15 min / 1 hour / until tomorrow), resume,
+  restart.
+Foreground service "ProtectionService":
+- Choose the correct foreground service type for its job under current
+  rules, declare it in the manifest with the required permission and any
+  required property, and explain the choice in the policy notes. Do NOT use
+  the microphone service type for the always-running service; microphone use
+  is only while the user is actively using voice (section 5).
+- Persistent, low-priority, clear notification in English/Malayalam showing
+  state ("SafeCircle is protecting you" / "Paused until 3:00 PM") with
+  actions: Pause, Resume, Open, Turn off. Plain wording, no scary text.
+- START_STICKY behaviour where appropriate, handling of onTaskRemoved, safe
+  restart logic, and a lightweight heartbeat timestamp written regularly so
+  the app can tell, on next open, that the service was killed
+  (STOPPED_BY_SYSTEM_SUSPECTED) and show a banner: "Protection was stopped by
+  your phone. Tap to restart" plus OEM-specific guidance from 5A.
+- Boot receiver: if protection was enabled, try to restart after reboot, but
+  respect current restrictions on starting foreground services from
+  BOOT_COMPLETED. If starting is not permitted, post a normal notification
+  "Tap to turn SafeCircle protection back on" instead. Never fail silently.
+- The service never starts itself without the user having enabled it, and
+  stops itself when protection is disabled or required permissions are
+  revoked.
+- Expose controller state and actions to the web layer through new
+  SafeCirclePlugin methods (getProtectionState, setFeatureEnabled, pause,
+  resume, restart) plus an event stream for state changes.
+
+## 2. Floating assistant (overlay)
+Implemented natively in Kotlin (WindowManager, TYPE_APPLICATION_OVERLAY),
+hosted by ProtectionService, gated by the "display over other apps"
+permission.
+- Collapsed state: small draggable bubble, position remembered, snaps to the
+  screen edge, never covers system gesture areas, minimum touch target 48dp,
+  content descriptions in the active language, optional reduced-motion.
+  A warning indicator (badge colour + icon, never colour alone) appears when a
+  recent screening result was BE_CAREFUL or DANGEROUS.
+- Expanded state: compact panel with: CHECK A MESSAGE (a text box with PASTE
+  and CHECK; the user taps Paste, because background apps cannot read the
+  clipboard silently on modern Android, so do not try), the result using the
+  same verdict badge, tactics and bilingual explanation from the Kotlin
+  engine, CALL FAMILY (dial intent to the stored contact), HELP (1930 and
+  112), minimize, close-for-now, and a settings gear.
+- Panel settings (reachable from the overlay itself): pause protection,
+  disable the floating assistant, disable voice, and "open full app". These
+  must call the same ProtectionController as the main app so the two places
+  never disagree.
+- Must not interfere with other apps: never take focus unless the text box is
+  active, use correct window flags, handle rotation, keyboard overlap,
+  multi-window, and hide on lock screen. Handle overlay permission revoked
+  while running (remove views, update state, no crash).
+- Strings come from the same i18n source as the app (generate Android string
+  resources from the shared dictionary at build time, so en/ml cannot drift).
+- Tapping a screening warning notification opens the full result.
+
+## 3. Notification screening (opt-in)
+NotificationListenerService, bound by the system only after the user enables
+access in system settings.
+- Explain clearly BEFORE sending the user to settings: what is read, that it
+  stays on the phone, that only chosen apps are watched, and how to turn it
+  off. Offer a short app allowlist the user can edit (default candidates:
+  common messaging and SMS apps; resolve the actual installed packages at
+  runtime; nothing is watched until the user confirms the list).
+- Strict filtering: ignore every package not on the allowlist, ignore own
+  notifications, ongoing/foreground-service notifications, group summaries and
+  empty text. Read only the minimum text fields needed. Never read other
+  apps' notifications for any other purpose.
+- Scan with the Kotlin engine using source = "notification". Then discard the
+  text immediately. Keep nothing but an Incident row (verdict, score, signal
+  ids, method, rule pack version, timestamp).
+- Dedupe repeated notifications (the same app and content hash held in memory
+  only, short TTL, never persisted), apply a rate limit, and keep processing
+  fast and off the main thread.
+- Result handling: SAFE -> nothing shown, nothing stored beyond a count if the
+  user wants stats (default: store nothing for SAFE). BE_CAREFUL -> quiet
+  notification to the senior. DANGEROUS -> high-importance heads-up
+  notification in the "Safety alerts" channel with simple bilingual advice
+  and a CALL FAMILY action, and update the overlay badge.
+- Guardian alerting: if the user has consented to sync and has an active
+  connection, reuse the Layer 3/4 sync queue so the guardian alert pipeline
+  runs. Do not build a second alert path. If offline, queue and retry. Do not
+  auto-contact anyone else.
+- A "Notification protection" settings page: status, watched apps, a
+  "what was checked today" count (numbers only), pause, disable, and a button
+  to the system permission page. If access is revoked, detect it on resume and
+  show the feature as off.
+- Handle service disconnects and rebind requests; verify behaviour when the
+  app process is killed.
+
+## 4. Share and clipboard-free design
+Already done in 5A (share intents). In the overlay do not poll the clipboard
+and do not use hidden clipboard access.
+
+## 5. Voice interaction
+Always include push-to-talk first; wake-word is optional and gated.
+- Push-to-talk: microphone button in the app and in the overlay panel using
+  Android SpeechRecognizer with ml-IN and en-IN (check availability, prefer
+  on-device recognition when available, and say plainly when the device needs
+  an internet connection for speech recognition because that sends audio to the
+  recognition provider; show this note to the user before first use and in the
+  Privacy Dashboard). Visible "microphone is on" indicator while listening.
+  Recognised text goes straight to the same engine; no audio is stored.
+- Spoken replies via TextToSpeech in the active language, with a clear
+  fallback message if no Malayalam voice is installed (link to the system TTS
+  settings).
+- Voice panel UI: large mic button, live transcript, result, repeat/stop
+  buttons.
+- Wake-word ("Hey SafeCircle"): define a WakeWordEngine interface with a
+  NoOp default implementation. Evaluate real on-device options and licensing
+  (record the comparison, including accent robustness for Indian English and
+  Malayalam, access-key or licence terms, and whether a custom phrase needs
+  training). Implement a real engine ONLY if it can be verified. If the
+  microphone foreground service type is needed for continuous listening, it
+  may only be started from a user-visible action while allowed, with a
+  separate persistent notification that says the microphone is in use, a
+  one-tap stop, no audio saved or sent, and automatic stop when paused. If you
+  cannot verify an engine on a real device, ship the interface, the settings
+  toggle marked "Experimental / not available in this build", and push-to-talk,
+  and document exactly what is missing. Never fake wake-word behaviour.
+
+## 6. Settings, permissions and honesty in the UI
+- Extend the Protection Setup screen from 5A so rows for overlay, notification
+  access, and microphone now work, each with status, a "why we need this"
+  explanation in English/Malayalam, and the correct system-settings
+  deep link. One setup sequence, skippable, no repeated nagging; remember
+  choices.
+- A Protection Status card on Senior Home (Android only): clear status (On /
+  Paused / Needs attention / Stopped by phone) with one-tap fix. No green
+  "fully protected" claim unless the service is actually running and the
+  heartbeat is fresh.
+- Privacy Dashboard: add rows for notification screening, overlay, microphone
+  and speech recognition data flow, what is stored, and what is never stored.
+- Guardian-visible info (if shared): only whether protection is active, never
+  notification contents.
+- Update the capability matrix and the Feature Status Matrix: mark each item
+  Functional / Experimental / Unverified on device / Needs policy approval.
+
+## 7. Tests and verification
+JVM unit tests (no Android needed):
+- ProtectionController state machine: enable/disable/pause/resume, expiry of
+  pauses, permission loss transitions, heartbeat staleness detection.
+- Notification filter: allowlist, own-package, ongoing, group summary, empty
+  text, dedupe TTL, rate limit.
+- Result handler mapping (verdict -> action) and "no text persisted" checks
+  by inspecting everything written to the Room database and logs in a fake
+  environment.
+- Re-run Kotlin conformance vectors and all earlier suites; nothing may
+  regress.
+Instrumented/emulator tests where possible:
+- Overlay add/remove, permission-revoked handling, notification posting via
+  adb (for example: adb shell cmd notification post ...) to exercise the
+  listener, boot receiver behaviour, rotation, service restart.
+Write docs/ANDROID_TEST_CHECKLIST.md: a manual test plan for at least two real
+devices from different makers, including: cold boot, swipe app from recents,
+battery saver on, device locked, notification from WhatsApp/SMS, overlay over
+a banking app and over a browser, Malayalam TTS, rotation, revoking each
+permission, long idle (service killed?), and Android version differences.
+Mark every item "NOT VERIFIED" unless it was actually run. State in the final
+message exactly which behaviours were verified on an emulator, which on a real
+device, and which are untested.
+
+## 8. Docs and finish
+- docs/ANDROID_POLICY_NOTES.md: current rules found, how each feature
+  complies, and the open Google Play declaration issues for the foreground
+  service type, overlay, and notification listener (the Play release is a
+  Layer 6 task; the APK sideload is the supported path for now).
+- Update docs/ARCHITECTURE.md (decisions, state machine diagram in mermaid,
+  data flow showing what stays on the device), docs/ANDROID_BUILD.md,
+  Feature Status Matrix.
+- Run typecheck, lint, all tests, web build, cap sync and
+  ./gradlew assembleDebug. Fix every failure. Commit.
+
+Acceptance criteria: each feature can be enabled, paused and disabled from
+both the app and (where applicable) the overlay, with both always showing the
+same state; revoking a permission disables only that feature; no notification
+or message text appears in the database, logs, backups or uploads; the
+Protection Status card reflects reality, including a killed service; the
+Kotlin engine still passes all conformance vectors; every unverified behaviour
+is listed explicitly; wake-word is either genuinely working and verified or
+clearly marked unavailable.
+Notes before running it
+You need a real Android phone for this layer. Emulators can't show OEM battery behaviour, the lock-screen overlay, real WhatsApp notifications, or Malayalam speech. Test on a Xiaomi/Oppo/Vivo/Realme device if you can, since those are common in Kerala and the most aggressive about killing services.
+Expect the notification listener to need an extra step on sideloaded builds on newer Android versions. The system can show a "restricted settings" prompt, so test the setup flow as a first-time user would.
+Read ANDROID_POLICY_NOTES.md carefully. A sideloaded APK is fine for your project demo, but a Play Store release would require policy declarations for these features and may not be approved as designed.
+Don't be surprised if wake-word ships as "experimental." That is the right outcome if the agent can't verify it, and push-to-talk covers the real need.
+Check the Malayalam notification wording on-device. Truncation and line-breaking in notifications differ from the web.
+
+That completes the Android layers. The last one is Prompt 6: premium and analytics polish, hardening, accessibility audit, documentation, release preparation (including Play policy options), and a final end-to-end verification pass. Say "next" when 5B is working.
+
+next
+
+Here's Prompt 6, the final layer. It covers the premium architecture, a signed rule-pack update mechanism (which I flagged in the review but haven't added yet), hardening, an accessibility pass, deployment, release preparation, and a full end-to-end verification.
+
+PROMPT 6: Premium, rule updates, hardening, release preparation and final verification
+Read docs/ARCHITECTURE.md, docs/SECURITY_NOTES.md, docs/ENGINE_REPORT.md,
+docs/ALERTS_AND_CLOUD_SETUP.md, docs/ANDROID_*.md, the Feature Status Matrix,
+and the whole repo structure first. Do not change existing contracts in
+packages/engine/src/types.ts or the rule-pack schema without stopping to ask
+me. New modules, migrations, functions and types are allowed.
+
+This is the final layer. It adds the premium architecture, safe rule-pack
+updates, deeper analytics, hardening and release preparation, then verifies
+the whole product end to end. Be rigorous: this layer's value is correctness
+and honesty, not new features for their own sake.
+
+## 0. Principles
+- No fake payments. Build entitlement plumbing and a provider interface only.
+- Core scam detection and one guardian with alerts remain FREE (decision from
+  Layer 3). Do not paywall safety.
+- Nothing in this layer may weaken privacy: no message text anywhere, cloud
+  features still off by default, analytics only from fields already allowed.
+- Every claim in UI and docs must match what is actually implemented and
+  verified. Update the Feature Status Matrix at the end with real statuses.
+
+## 1. Premium and multi-elder support
+- Finish entitlement enforcement server-side (functions and RLS where
+  applicable) and client-side (useEntitlements): free = 1 elder connection
+  with alerts; family plan = multiple elders per guardian, extended
+  analytics, family reports, advanced settings.
+- Guardian UI for multiple elders: elder switcher, combined overview with a
+  per-person breakdown, per-elder notification settings, and a clear
+  "needs the family plan" state (no dark patterns, no nagging, no blocking of
+  safety features).
+- Plan changes: downgrade handling (what happens to extra connections:
+  pause, never silently delete, let the user choose which stays active),
+  grace period, expired subscription behaviour.
+- PaymentProvider interface with a DevMockProvider (clearly labelled, only
+  enabled by a dev flag) and documented steps for integrating a real Indian
+  payment provider later. Do not add any real checkout UI or collect payment
+  details. A service-role-only function sets subscription status; clients can
+  never write it.
+- Tests: entitlement matrix (free/family/expired/downgraded) for every gated
+  action, including attempts to bypass via direct API calls.
+
+## 2. Personalised assistance framework (no fake service)
+- "Get extra help" flow in the guardian and senior UIs: a request form (topic
+  chosen from a fixed list, preferred language, optional contact method,
+  consent checkbox) stored in a help_requests table with RLS; contains no
+  message content. Status: submitted / acknowledged / closed.
+- A static, honest information screen: "Personalised digital safety support is
+  being planned. Your request is saved so we can contact you." Do not invent
+  staff, prices or availability. Provide an admin-only function to list and
+  update requests, documented but with no admin UI.
+- Offline-capable learning content: 8-10 short bilingual scam-awareness
+  lessons (digital arrest, fake KYC, OTP/PIN rules, remote-access apps, APK
+  files, UPI collect requests, emergency-relative calls, what to do after a
+  scam) as static content with large text, read-aloud, and a simple
+  "I understood" check (no scoring pressure). Mark all Malayalam text
+  "needs native review" in the content metadata.
+
+## 3. Advanced analytics and reports
+- Extend Scam Analytics (family plan): per-elder and combined views, scam
+  type trends, time-of-day patterns, repeated-pattern detection (signal
+  combinations recurring), recommended support level per elder using the
+  existing exposure.ts, and a downloadable family safety report (PDF or
+  print-ready HTML) generated client-side from synced fields only.
+- Wording review: scan all analytics and recommendation strings for blame or
+  judgmental language; add a test with a banned-phrase list (for example
+  "careless", "gullible", "vulnerable person", "failed").
+- Add data-minimisation controls: retention setting for synced incidents
+  (for example 90/180/365 days), automatic server-side purge function, and a
+  "delete everything" path for the elder.
+
+## 4. Signed, versioned rule-pack updates
+The engine ships with a bundled pack. Add an optional update path:
+- Build tooling (packages/engine/scripts): validate a pack against the schema,
+  run the regex portability linter, run the full tune and heldout datasets AND
+  the conformance vectors against both TypeScript and Kotlin engines, and sign
+  the result (Ed25519 detached signature). The private key is never in the
+  repo; document key generation and storage. The public key is bundled in the
+  web app and the Android app.
+- Distribution: a rule_packs table (version, checksum, signature, min_app_
+  version, released_at, status) plus a function get-latest-rulepack, or static
+  hosting; choose one and document why. Clients check on app start and
+  periodically (not in the background without the service), download over
+  HTTPS, verify signature, checksum, schema, semantic version monotonicity and
+  min_app_version BEFORE activating, then run a built-in self-test (a small
+  set of embedded vectors); on any failure keep the current pack and report
+  nothing sensitive.
+- Rollback: keep the previous pack, auto-revert if the self-test fails,
+  manual "use bundled pack" switch in Settings (advanced).
+- Safety rule: an update can add rules, but the signed process must show the
+  measured heldout metrics diff; document that a regression must block release.
+- Show the active pack version in About and the Privacy Dashboard.
+- Tests: tampered pack rejected, wrong signature rejected, downgrade rejected,
+  schema-invalid rejected, offline keeps bundled pack, self-test failure
+  reverts, both engines load the same updated pack and pass the same vectors.
+
+## 5. Hardening pass
+- Web: strict Content-Security-Policy and security headers (Vercel config),
+  no inline scripts where avoidable, dependency audit (npm audit, fix or
+  document each finding), lockfile committed, subresource and third-party
+  script review, secrets scan (for example gitleaks) wired into a script,
+  bundle check that no server secret appears in output, error boundaries so
+  screens never show a blank page, and sanitised error reporting (no message
+  text, tokens or URLs).
+- Backend: re-review every function for authz, input validation, rate limits,
+  payload size caps, generic errors and logging policy; re-audit RLS with the
+  full RLS test suite plus new tables; verify that the service-role key is
+  used only inside functions; add a script that lists every table and fails
+  if any table lacks RLS.
+- Android: R8/ProGuard release build verified, exported components audited,
+  network security config (no cleartext), backups excluded, no debuggable
+  release, permissions list reviewed against what features actually need
+  (remove anything unused), dependency vulnerability check (Gradle dependency
+  scanning), and verify that logs in release builds contain no sensitive text.
+- Abuse scenarios to test and document: invite-code social engineering,
+  guardian misuse, alert spoofing, quota exhaustion, replayed requests,
+  malformed shares, huge payloads, ReDoS strings against both engines.
+- Write docs/THREAT_MODEL.md and docs/PRIVACY_AND_DATA_PROTECTION.md:
+  data inventory (what, where, why, retention, deletion), third-party flows
+  (Supabase, Telegram, email provider, Google services, FCM), user rights
+  mapped to features, and a section marked "must be reviewed by a qualified
+  legal professional (India DPDP Act 2023)". Do not state legal conclusions.
+
+## 6. Accessibility, localisation and usability
+- Run automated checks (axe, Lighthouse) on every main screen in all themes,
+  at the largest font scale, in English and Malayalam; fix all serious and
+  critical issues. Check contrast in the high-contrast theme, focus order,
+  screen-reader labels (verify with TalkBack on Android if a device is
+  available, otherwise mark unverified), touch target sizes, and reduced
+  motion behaviour.
+- Layout checks at 320px, 360px, 412px and tablet widths with Malayalam text
+  expansion; fix overflow and truncation (Malayalam script needs generous line
+  height).
+- Localisation audit: a script that fails if any key is missing in either
+  language, finds hardcoded user-facing strings, and exports every Malayalam
+  string (UI, engine templates, lessons, notifications, emails, Telegram) into
+  a single reviewable spreadsheet-style file (CSV) with columns: key, English,
+  Malayalam, location, reviewed (blank). Native-speaker review is a human
+  task; do not mark anything reviewed.
+- Write docs/USABILITY_TEST_PLAN.md: a short, ethical test plan for trying the
+  app with 5-8 real seniors and their family members (consent, scripts, tasks
+  such as "check this message", "call your family", "approve a connection",
+  what to observe, how to record results without recording personal data).
+
+## 7. Performance and reliability
+- Measure and report: web bundle size, time to interactive on a throttled
+  mid-range profile, scan latency in TS and Kotlin on a 2,000-character
+  message, memory use of the foreground service (as far as measurable), and
+  database query plans for the dashboard queries (add indexes if needed).
+- Reliability: retry/backoff and idempotency review of the sync queue and
+  alert worker, behaviour when the backend is down, and a documented
+  degraded-mode table (what works offline, what needs the network).
+- Add a simple health-check function and a runbook (docs/RUNBOOK.md) covering
+  Supabase project pausing on free tier (and the keep-alive plan for the
+  demo), quota exhaustion, expired keys, and rotating secrets.
+
+## 8. Deployment and release preparation
+- Vercel: vercel.json, env var setup, preview vs production, region choice
+  notes, and a clear note that the free Hobby plan is for non-commercial use
+  and that production use with paid plans needs a plan review (check current
+  terms and cite what you found).
+- CI (GitHub Actions): install, typecheck, lint, unit tests, JVM conformance,
+  rule-pack lint, RLS tests (where a local Supabase can run), web build,
+  secret scan, and Android assembleDebug. Document what CI cannot cover.
+- Android release: signed release build instructions, versioning scheme,
+  APK distribution for demo (sideload steps for a non-technical person, with
+  Malayalam instructions), and docs/PLAY_STORE_PATH.md describing the options
+  honestly: (1) sideload only, (2) Play release WITHOUT overlay and
+  notification-listener features (share, manual check, push, guardian),
+  (3) Play release with sensitive features after policy declarations and
+  review. Explain the risk that (3) may be refused, and recommend which
+  features to put in which build flavour. Implement build flavours
+  (for example "full" and "store") so the store build compiles without the
+  restricted components. Verify both flavours build.
+- README.md: what SafeCircle is, what it is NOT (not a bank, police or
+  guaranteed protection), architecture overview, quick start, setup for
+  every integration, testing, deployment, limitations, and a link to every
+  doc. Add LICENSE placeholder and CONTRIBUTING notes if appropriate.
+- Add docs/DEMO_SCRIPT.md: a 5-7 minute demonstration flow for a project
+  presentation using DEMO_MODE where needed (senior checks a digital-arrest
+  message, guardian alert arrives, guardian reviews, exposure overview,
+  offline mode, privacy dashboard), with a fallback plan if the network fails.
+
+## 9. Final end-to-end verification
+Run and report, with actual output, not summaries from memory:
+1. Fresh clone -> install -> typecheck -> lint -> all unit tests -> JVM
+   conformance -> rule-pack lint -> web build -> secrets/bundle check.
+2. RLS suite and function tests against a local or test Supabase stack.
+3. Playwright suites: (a) senior offline journey, (b) account + family linking
+   + approval + revoke, (c) DANGEROUS scan -> guardian alert -> review ->
+   elder sees delivery status, (d) cloud features OFF behaves identically,
+   (e) Gemini and Safe Browsing unavailable fallback, (f) rule-pack update
+   success and tampered-pack rejection, (g) free vs family entitlements.
+4. Android: assembleDebug and release for both flavours; list exactly what
+   was run on an emulator and what on a real device; everything not run on a
+   real device stays marked UNVERIFIED in docs/ANDROID_TEST_CHECKLIST.md.
+5. Engine report: re-run tune and heldout datasets on both engines and put
+   the measured results in docs/ENGINE_REPORT.md. Do not state any accuracy
+   percentage that was not measured here, and state that the datasets are
+   synthetic/author-written and do not represent real-world performance.
+6. Regression scan: privacy tests proving no message text in IndexedDB, Room,
+   Postgres rows, logs, notifications, alert payloads or analytics.
+Fix every failure you can. For anything you cannot fix or verify, list it
+under "Known limitations" with the reason.
+
+## 10. Final deliverables
+- Updated Feature Status Matrix with honest statuses for every feature:
+  Functional / Simulated / Needs configuration / Experimental / Unverified on
+  device / Needs policy approval / Not built.
+- A single docs/RELEASE_READINESS.md: checklist of what must happen before real
+  users (native Malayalam review, legal review, production backend plans, real
+  device testing across makers, usability testing with seniors, Play policy
+  decision, incident response contact, support process).
+- Commit and tag a release candidate (for example v0.1.0-rc1).
+
+Acceptance criteria: every gated feature is enforced server-side; rule-pack
+updates are signed, verified, reversible and tested against both engines;
+both Android flavours build; no table lacks RLS; no secret is in any client
+artifact; accessibility issues rated serious or critical are fixed or
+documented; all reported metrics come from runs performed in this task; the
+Feature Status Matrix matches reality, with unverified items clearly marked

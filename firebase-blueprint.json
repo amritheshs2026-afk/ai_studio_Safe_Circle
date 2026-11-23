@@ -1,0 +1,208 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Owner-only user profile and cloud opt-in preferences (no message text).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "language": { "type": "string", "enum": ["en", "ml"] },
+        "cloudExplanationsEnabled": { "type": "boolean" },
+        "retentionDays": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "language", "cloudExplanationsEnabled", "retentionDays", "createdAt", "updatedAt"]
+    },
+    "FamilyInvitation": {
+      "title": "FamilyInvitation",
+      "description": "Single-use 15-minute SHA-256 hashed invitation created by an elder.",
+      "type": "object",
+      "properties": {
+        "elderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "elderName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "tokenHash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$" },
+        "status": { "type": "string", "enum": ["active", "used", "revoked"] },
+        "usedBy": { "type": "string", "maxLength": 128 },
+        "attempts": { "type": "number" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["elderId", "elderName", "tokenHash", "status", "attempts", "expiresAt", "createdAt", "updatedAt"]
+    },
+    "FamilyConnection": {
+      "title": "FamilyConnection",
+      "description": "Per-connection elder-guardian relationship with explicit share level and sync consent.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "elderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "guardianId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "elderName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "guardianName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "guardianLabel": { "type": "string", "maxLength": 40 },
+        "status": { "type": "string", "enum": ["pending", "active", "revoked"] },
+        "shareLevel": { "type": "string", "enum": ["none", "alerts_only", "alerts_and_summary"] },
+        "syncConsent": { "type": "boolean" },
+        "invitationId": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$" },
+        "revokedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "elderId", "guardianId", "elderName", "guardianName", "guardianLabel", "status", "shareLevel", "syncConsent", "invitationId", "createdAt", "updatedAt"]
+    },
+    "AuthorizedGuardian": {
+      "title": "AuthorizedGuardian",
+      "description": "Elder-controlled authorization record enabling immediate guardian access revocation.",
+      "type": "object",
+      "properties": {
+        "elderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "guardianId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "connectionId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "shareLevel": { "type": "string", "enum": ["none", "alerts_only", "alerts_and_summary"] },
+        "syncConsent": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["elderId", "guardianId", "connectionId", "shareLevel", "syncConsent", "updatedAt"]
+    },
+    "ScamIncident": {
+      "title": "ScamIncident",
+      "description": "Non-text scam scan record synced by an elder (never stores raw message text, URLs, or senders).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "elderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "scannedAt": { "type": "string", "minLength": 10, "maxLength": 40 },
+        "score": { "type": "number" },
+        "verdict": { "type": "string", "enum": ["SAFE", "BE_CAREFUL", "DANGEROUS"] },
+        "category": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "signalIds": { "type": "array" },
+        "detectionMethod": { "type": "string", "enum": ["LOCAL_RULES", "LOCAL_AI", "CLOUD_AI", "HYBRID"] },
+        "rulePackVersion": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "reviewed": { "type": "boolean" },
+        "falsePositive": { "type": "boolean" },
+        "userOutcome": { "type": "string", "enum": ["avoided", "interacted", "unsure", "none"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "elderId", "scannedAt", "score", "verdict", "category", "signalIds", "detectionMethod", "rulePackVersion", "reviewed", "falsePositive", "userOutcome", "createdAt", "updatedAt"]
+    },
+    "GuardianAlert": {
+      "title": "GuardianAlert",
+      "description": "Non-text scam alert visible to elder (delivery transparency) and authorized guardian.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "incidentId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "elderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "elderName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "guardianId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "guardianName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "score": { "type": "number" },
+        "verdict": { "type": "string", "enum": ["SAFE", "BE_CAREFUL", "DANGEROUS"] },
+        "category": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "signalIds": { "type": "array" },
+        "status": { "type": "string", "enum": ["pending", "delivered", "seen", "reviewed"] },
+        "channels": { "type": "array" },
+        "userOutcome": { "type": "string", "enum": ["avoided", "interacted", "unsure", "none"] },
+        "falsePositive": { "type": "boolean" },
+        "scannedAt": { "type": "string", "minLength": 10, "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "incidentId", "elderId", "elderName", "guardianId", "guardianName", "score", "verdict", "category", "signalIds", "status", "channels", "userOutcome", "falsePositive", "scannedAt", "createdAt", "updatedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable elder-readable connection and consent audit log entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "elderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "connectionId": { "type": "string", "maxLength": 128 },
+        "action": { "type": "string", "enum": ["invited", "invite_failed", "redeemed", "approved", "rejected", "revoked", "share_level_changed", "sync_consent_changed", "data_deleted"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "elderId", "actorId", "actorName", "connectionId", "action", "createdAt"]
+    },
+    "NotificationPreference": {
+      "title": "NotificationPreference",
+      "description": "Guardian notification preferences per elder, also readable by elder for transparency.",
+      "type": "object",
+      "properties": {
+        "guardianId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "elderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "inApp": { "type": "boolean" },
+        "email": { "type": "boolean" },
+        "push": { "type": "boolean" },
+        "notifyOnBeCareful": { "type": "boolean" },
+        "includeElderName": { "type": "boolean" },
+        "quietHoursStart": { "type": "string", "maxLength": 5 },
+        "quietHoursEnd": { "type": "string", "maxLength": 5 },
+        "dangerousBypassesQuietHours": { "type": "boolean" },
+        "escalationMinutes": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["guardianId", "elderId", "inApp", "email", "push", "notifyOnBeCareful", "includeElderName", "quietHoursStart", "quietHoursEnd", "dangerousBypassesQuietHours", "escalationMinutes", "updatedAt"]
+    },
+    "HelpRequest": {
+      "title": "HelpRequest",
+      "description": "Topic-based assistance request with consent and capped note (max 200 chars).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "topic": { "type": "string", "enum": ["suspicious_call", "suspicious_message", "account_setup", "family_linking", "scam_recovery_guidance", "accessibility_help"] },
+        "language": { "type": "string", "enum": ["en", "ml"] },
+        "contactMethod": { "type": "string", "enum": ["in_app", "email", "phone_callback"] },
+        "note": { "type": "string", "maxLength": 200 },
+        "consent": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["submitted", "acknowledged", "closed"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "topic", "language", "contactMethod", "note", "consent", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner-only user profile and cloud settings."
+    },
+    "/familyInvitations/{invitationId}": {
+      "schema": { "$ref": "#/entities/FamilyInvitation" },
+      "description": "Hashed single-use 15-minute family invitation tokens."
+    },
+    "/familyConnections/{connectionId}": {
+      "schema": { "$ref": "#/entities/FamilyConnection" },
+      "description": "Elder-guardian connection states and share-level controls."
+    },
+    "/elders/{elderId}/authorizedGuardians/{guardianId}": {
+      "schema": { "$ref": "#/entities/AuthorizedGuardian" },
+      "description": "Elder-managed authorization gate for instant revocation."
+    },
+    "/elders/{elderId}/incidents/{incidentId}": {
+      "schema": { "$ref": "#/entities/ScamIncident" },
+      "description": "Synced non-text scam scan incidents belonging to an elder."
+    },
+    "/elders/{elderId}/guardianAlerts/{alertId}": {
+      "schema": { "$ref": "#/entities/GuardianAlert" },
+      "description": "Non-text alerts delivered to active guardians and visible to the elder."
+    },
+    "/elders/{elderId}/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable elder-visible audit trail for family links and data actions."
+    },
+    "/notificationPreferences/{prefId}": {
+      "schema": { "$ref": "#/entities/NotificationPreference" },
+      "description": "Guardian notification channel and quiet-hour settings."
+    },
+    "/helpRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/HelpRequest" },
+      "description": "Owner-only assistance requests with capped note."
+    }
+  }
+}

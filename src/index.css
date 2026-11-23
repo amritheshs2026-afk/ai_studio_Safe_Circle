@@ -1,0 +1,125 @@
+@import "tailwindcss";
+@import "@fontsource/plus-jakarta-sans/600.css";
+@import "@fontsource/plus-jakarta-sans/700.css";
+@import "@fontsource/dm-sans/400.css";
+@import "@fontsource/dm-sans/500.css";
+@import "@fontsource/dm-sans/700.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/noto-sans-malayalam/400.css";
+@import "@fontsource/noto-sans-malayalam/600.css";
+@import "@fontsource/noto-sans-malayalam/700.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --sc-bg: #F4F8FB;
+  --sc-surface: #FFFFFF;
+  --sc-surface-muted: #EAF2F8;
+  --sc-border: #D5E2EE;
+  --sc-text: #10222F;
+  --sc-text-muted: #44596B;
+  --sc-primary: #0B5CAD;
+  --sc-primary-hover: #084785;
+  --sc-accent: #0F8B8D;
+  --sc-safe-text: #1B7F3B;
+  --sc-safe-bg: #E8F6EC;
+  --sc-careful-text: #9A5B00;
+  --sc-careful-bg: #FFF1D6;
+  --sc-danger-text: #B42318;
+  --sc-danger-bg: #FDE8E6;
+  --sc-font-scale: 1;
+}
+
+html.dark {
+  --sc-bg: #0B1520;
+  --sc-surface: #132232;
+  --sc-surface-muted: #1B2E42;
+  --sc-border: #283F57;
+  --sc-text: #F0F6FC;
+  --sc-text-muted: #ADC1D4;
+  --sc-primary: #4DA3FF;
+  --sc-primary-hover: #73B8FF;
+  --sc-accent: #2DD4BF;
+  --sc-safe-text: #6EE798;
+  --sc-safe-bg: #10331D;
+  --sc-careful-text: #FCD34D;
+  --sc-careful-bg: #3A2808;
+  --sc-danger-text: #FCA5A5;
+  --sc-danger-bg: #3D1414;
+}
+
+html.high-contrast {
+  --sc-bg: #000000;
+  --sc-surface: #111111;
+  --sc-surface-muted: #1E1E1E;
+  --sc-border: #FFFFFF;
+  --sc-text: #FFFFFF;
+  --sc-text-muted: #E5E7EB;
+  --sc-primary: #7DD3FC;
+  --sc-primary-hover: #BAE6FD;
+  --sc-accent: #5EEAD4;
+  --sc-safe-text: #86EFAC;
+  --sc-safe-bg: #052E16;
+  --sc-careful-text: #FDE047;
+  --sc-careful-bg: #422006;
+  --sc-danger-text: #FCA5A5;
+  --sc-danger-bg: #450A0A;
+}
+
+html {
+  font-size: calc(18px * var(--sc-font-scale, 1));
+  background-color: var(--sc-bg);
+  color: var(--sc-text);
+  font-family: 'DM Sans', 'Noto Sans Malayalam', system-ui, -apple-system, sans-serif;
+}
+
+html[data-lang="ml"] body {
+  line-height: 1.65;
+}
+
+h1, h2, h3, .font-display {
+  font-family: 'Plus Jakarta Sans', 'Noto Sans Malayalam', system-ui, sans-serif;
+  text-wrap: balance;
+}
+
+.font-mono-tabular {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+html.reduce-motion *,
+html.reduce-motion *::before,
+html.reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Visible keyboard focus ring */
+:focus-visible {
+  outline: 3px solid var(--sc-primary);
+  outline-offset: 2px;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #FFFFFF !important;
+    color: #000000 !important;
+  }
+}

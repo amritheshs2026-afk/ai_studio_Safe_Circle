@@ -1,0 +1,563 @@
+{
+  "version": "in-1.0.0",
+  "updatedAt": "2026-11-22",
+  "thresholds": {
+    "carefulMin": 30,
+    "dangerousMin": 60
+  },
+  "officialDomains": [
+    { "brand": "sbi", "hosts": ["sbi.co.in", "onlinesbi.sbi"], "verifiedOn": "2026-11-22" },
+    { "brand": "hdfc", "hosts": ["hdfcbank.com"], "verifiedOn": "2026-11-22" },
+    { "brand": "icici", "hosts": ["icicibank.com"], "verifiedOn": "2026-11-22" },
+    { "brand": "axis", "hosts": ["axisbank.com"], "verifiedOn": "2026-11-22" },
+    { "brand": "federal", "hosts": ["federalbank.co.in"], "verifiedOn": "2026-11-22" },
+    { "brand": "southindian", "hosts": ["southindianbank.bank.in", "southindianbank.com"], "verifiedOn": "2026-11-22" },
+    { "brand": "csb", "hosts": ["csb.co.in"], "verifiedOn": "2026-11-22" },
+    { "brand": "dhanbank", "hosts": ["dhanbank.com"], "verifiedOn": "2026-11-22" },
+    { "brand": "keralagbank", "hosts": ["keralagbank.com"], "verifiedOn": "2026-11-22" },
+    { "brand": "kseb", "hosts": ["kseb.in"], "verifiedOn": "2026-11-22" },
+    { "brand": "parivahan", "hosts": ["parivahan.gov.in"], "verifiedOn": "2026-11-22" },
+    { "brand": "incometax", "hosts": ["incometax.gov.in"], "verifiedOn": "2026-11-22" },
+    { "brand": "uidai", "hosts": ["uidai.gov.in"], "verifiedOn": "2026-11-22" },
+    { "brand": "npci", "hosts": ["npci.org.in"], "verifiedOn": "2026-11-22" },
+    { "brand": "rbi", "hosts": ["rbi.org.in"], "verifiedOn": "2026-11-22" },
+    { "brand": "cybercrime", "hosts": ["cybercrime.gov.in"], "verifiedOn": "2026-11-22" },
+    { "brand": "india", "hosts": ["india.gov.in"], "verifiedOn": "2026-11-22" },
+    { "brand": "irctc", "hosts": ["irctc.co.in"], "verifiedOn": "2026-11-22" }
+  ],
+  "signals": [
+    {
+      "signalId": "AUTHORITY_CLAIM",
+      "weight": 15,
+      "rules": [
+        {
+          "id": "auth_en_caller",
+          "type": "regex",
+          "pattern": "\\b(this is|calling from|i am|we are from|speaking from|department of)\\b.{0,30}\\b(cbi|ed|ncb|rbi|trai|dot|cyber cell|cyber crime|police|customs|income tax|narcotics|enforcement directorate|court|vigilance|uidai|aadhaar|bank manager|bank officer)\\b|\\b(cbi|ed|ncb|enforcement directorate|cyber cell|cyber crime|narcotics control bureau)\\b.{0,35}\\b(calling|notice|officer|inspector|wing|cell|department|warrant|summons|seizure|custody|safe account)\\b",
+          "languages": ["en"],
+          "notes": "Requires claim verb or coercive authority-office context so neutral news forwards do not trigger alone."
+        },
+        {
+          "id": "auth_en_parcel",
+          "type": "regex",
+          "pattern": "\\b(fedex|dhl|blue dart|india post|customs|parcel)\\b.{0,30}\\b(seized|seizure|held|detained|illegal|drugs|passport|parcel)\\b",
+          "languages": ["en"],
+          "notes": "Courier/customs parcel seizure claim."
+        },
+        {
+          "id": "auth_en_trai_disconnect",
+          "type": "regex",
+          "pattern": "\\b(trai|telecom|jio|airtel|bsnl|vi|kseb|mvd|rto|parivahan)\\b.{0,35}\\b(disconnect|block|suspend|notice|challan|bill unpaid|cut power)\\b",
+          "languages": ["en"],
+          "notes": "Telecom/utility/RTO impersonation threats."
+        },
+        {
+          "id": "auth_ml_officer",
+          "type": "regex",
+          "pattern": "(സിബിഐ|പോലീസ്|സൈബർ|കസ്റ്റംസ്|ആർബിഐ|ട്രായ്|കെഎസ്ഇബി|ബാങ്ക് മാനേജർ|ഓഫീസർ).{0,25}(ആണ്|നിന്നാണ്|വിളിക്കുന്നത്|പിടിച്ചെടുത്തു|അറിയിപ്പ്)",
+          "languages": ["ml"],
+          "notes": "Malayalam authority impersonation."
+        },
+        {
+          "id": "auth_manglish",
+          "type": "regex",
+          "pattern": "\\b(njan|njn|njaan)\\b.{0,25}\\b(cbi|police|cyber|customs|bank|officer|kseb|rto)\\b|\\b(police station il ninnanu|cbi il ninnanu|customs pidichedu)\\b",
+          "languages": ["manglish"],
+          "notes": "Manglish authority claim."
+        },
+        {
+          "id": "auth_hinglish",
+          "type": "regex",
+          "pattern": "\\b(main|hum)\\b.{0,25}\\b(police|cbi|cyber|customs|rbi|bank)\\b.{0,20}\\b(bol raha|se bol|officer)\\b|\\b(aapka parcel customs)\\b",
+          "languages": ["hinglish"],
+          "notes": "Hinglish authority claim."
+        }
+      ]
+    },
+    {
+      "signalId": "URGENCY_THREAT",
+      "weight": 15,
+      "rules": [
+        {
+          "id": "urg_en_legal",
+          "type": "regex",
+          "pattern": "\\b(digital arrest|arrest warrant|non-bailable|fir registered|case registered|money laundering|legal action|court summons|police custody)\\b",
+          "languages": ["en"],
+          "notes": "Digital arrest and legal threat phrases."
+        },
+        {
+          "id": "urg_en_account_deadline",
+          "type": "regex",
+          "pattern": "\\b(account|sim|number|card|kyc|electricity|power|pan)\\b.{0,35}\\b(blocked|suspended|frozen|disconnected|deactivated|expire|expires today|terminated)\\b|\\b(last warning|final notice|immediate action required|within [0-9]{1,2} (hours|minutes|hrs|mins)|act immediately)\\b|\\b(transfer|pay|send|reply|share|download|install)\\b.{0,25}\\b(immediately|right now|urgently|today itself)\\b",
+          "languages": ["en"],
+          "notes": "Account/service cutoff threat or countdown pressure."
+        },
+        {
+          "id": "urg_ml_threat",
+          "type": "regex",
+          "pattern": "(അറസ്റ്റ് വാറന്റ്|അക്കൗണ്ട്.{0,18}ബ്ലോക്ക്|കേസ് രജിസ്റ്റർ|നിയമനടപടി|സിം കട്ട്|വിച്ഛേദിക്കും|അവസാന മുന്നറിയിപ്പ്|ഉടൻ തന്നെ|ഉടനെ|ഇന്ന് രാത്രി കട്ടാകും)",
+          "languages": ["ml"],
+          "notes": "Malayalam urgency and threat cues."
+        },
+        {
+          "id": "urg_manglish",
+          "type": "regex",
+          "pattern": "\\b(account block aavum|block cheyyum|arrest cheyyum|case eduthu|ippol thanne|udan thanne|sim cut cheyyum|avasanathe munnariyippu)\\b",
+          "languages": ["manglish"],
+          "notes": "Manglish urgency and threat cues."
+        },
+        {
+          "id": "urg_hinglish",
+          "type": "regex",
+          "pattern": "\\b(account band ho jayega|giriftar|warrant jaari|abhi turant|aakhri chetavani|sim band ho jayega)\\b",
+          "languages": ["hinglish"],
+          "notes": "Hinglish urgency and threat cues."
+        }
+      ]
+    },
+    {
+      "signalId": "SECRECY",
+      "weight": 20,
+      "rules": [
+        {
+          "id": "sec_en",
+          "type": "regex",
+          "pattern": "\\b(do not tell anyone|don't tell anyone|dont tell anyone|do not inform|don't inform|dont inform|keep this confidential|keep (it|this) secret|stay on the video call|stay on video call|stay on the call|stay on call|do not disconnect|don't disconnect|dont disconnect|do not hang up|do not go to the bank|don't tell bank staff|do not contact your family|do not tell (dad|mom|father|mother|parents|family|husband|wife)|don't tell (dad|mom|family)|dont tell (dad|mom|family))\\b",
+          "languages": ["en"],
+          "notes": "Isolation and secrecy tactics common in digital arrest and relative scams."
+        },
+        {
+          "id": "sec_ml",
+          "type": "regex",
+          "pattern": "(ആരോടും പറയരുത്|വീട്ടുകാരോട് പറയരുത്|കോൾ കട്ട് ചെയ്യരുത്|രഹസ്യമായി വയ്ക്കുക|വീഡിയോ കോളിൽ തുടരുക|ബാങ്കിൽ പോകരുത്)",
+          "languages": ["ml"],
+          "notes": "Malayalam secrecy instructions."
+        },
+        {
+          "id": "sec_manglish",
+          "type": "regex",
+          "pattern": "\\b(aarodum parayaruthu|veettukarodu parayaruthu|call cut cheyyaruthu|disconnect cheyyaruthu|bankil pokaruthu)\\b",
+          "languages": ["manglish"],
+          "notes": "Manglish secrecy instructions."
+        },
+        {
+          "id": "sec_hinglish",
+          "type": "regex",
+          "pattern": "\\b(kisi ko mat batana|ghar walon ko mat batana|call mat kaatna|video call par raho|bank mat jaana)\\b",
+          "languages": ["hinglish"],
+          "notes": "Hinglish secrecy instructions."
+        }
+      ]
+    },
+    {
+      "signalId": "MONEY_REQUEST",
+      "weight": 20,
+      "rules": [
+        {
+          "id": "mon_en_transfer",
+          "type": "regex",
+          "pattern": "\\b(transfer|deposit|send|pay|need|demanding|wire)\\b.{0,30}\\b(safe account|rbi account|court account|clearance charge|verification fee|processing fee|fine|penalty|bail|security deposit|rs\\.? ?[0-9]+|inr ?[0-9]+|rupees|upi|gpay|phonepe|paytm|money)\\b|\\b(rs\\.? ?[0-9]+|inr ?[0-9]+)\\b.{0,20}\\b(transfer|deposit|fee|charge|penalty)\\b",
+          "languages": ["en"],
+          "notes": "Payment, fee, or safe-account transfer demand."
+        },
+        {
+          "id": "mon_en_qr_collect",
+          "type": "regex",
+          "pattern": "\\b(scan (this|the) qr|accept (the|this) collect request|enter pin to receive|approve upi request|gift card|crypto transfer|send money now)\\b",
+          "languages": ["en"],
+          "notes": "UPI QR/collect scam and gift card demand."
+        },
+        {
+          "id": "mon_ml",
+          "type": "regex",
+          "pattern": "(പണം അയക്കുക|ട്രാൻസ്ഫർ ചെയ്യുക|ഫീസ് അടയ്ക്കുക|പിഴ അടയ്ക്കുക|ക്യുആർ കോഡ് സ്കാൻ|യുപിഐ വഴി അയക്കൂ|സേഫ് അക്കൗണ്ട്)",
+          "languages": ["ml"],
+          "notes": "Malayalam money request."
+        },
+        {
+          "id": "mon_manglish",
+          "type": "regex",
+          "pattern": "\\b(paisa ayakkuka|paisa ayakku|paisa transfer cheyyuka|fee adakkuka|qr scan cheyyuka|upi il ayakku)\\b",
+          "languages": ["manglish"],
+          "notes": "Manglish money request."
+        },
+        {
+          "id": "mon_hinglish",
+          "type": "regex",
+          "pattern": "\\b(paisa bhejo|paise transfer karo|upi se payment karo|qr scan karo|fine bharo|fee jama karo)\\b",
+          "languages": ["hinglish"],
+          "notes": "Hinglish money request."
+        }
+      ]
+    },
+    {
+      "signalId": "SENSITIVE_INFO_REQUEST",
+      "weight": 25,
+      "rules": [
+        {
+          "id": "info_en_request",
+          "type": "regex",
+          "pattern": "\\b(share|send|tell|give|enter|confirm|verify|update|read out|forward|provide|type|submit)\\b.{0,28}\\b(otp|upi pin|atm pin|mpin|pin|cvv|card number|expiry|password|net banking|aadhaar|pan number|account number|9-digit code|nine digit code)\\b",
+          "languages": ["en"],
+          "notes": "Requesting sensitive credentials or remote access codes. Checked against negation/delivery window in scanner."
+        },
+        {
+          "id": "info_en_reverse",
+          "type": "regex",
+          "pattern": "\\b(otp|pin|cvv|kyc|aadhaar|pan)\\b.{0,20}\\b(needed|required|share with me|send back|tell me|read out)\\b",
+          "languages": ["en"],
+          "notes": "Reverse word order sensitive info request."
+        },
+        {
+          "id": "info_ml",
+          "type": "regex",
+          "pattern": "(ഒടിപി|otp|പിൻ|pin|സിവിവി|cvv|ആധാർ|പാസ്‌വേഡ്|കാർഡ് നമ്പർ).{0,20}(പറയൂ|നൽകുക|അയക്കൂ|ചേർക്കുക|പങ്കുവയ്ക്കൂ)",
+          "languages": ["ml"],
+          "notes": "Malayalam credential request."
+        },
+        {
+          "id": "info_manglish",
+          "type": "regex",
+          "pattern": "\\b(otp|pin|cvv|aadhaar|pan)\\b.{0,18}\\b(parayuka|parayu|ayakkuka|ayakku|kodukku|tharu)\\b",
+          "languages": ["manglish"],
+          "notes": "Manglish credential request."
+        },
+        {
+          "id": "info_hinglish",
+          "type": "regex",
+          "pattern": "\\b(otp|pin|cvv|aadhaar|pan)\\b.{0,18}\\b(batao|bhejo|do|daalo|share karo)\\b",
+          "languages": ["hinglish"],
+          "notes": "Hinglish credential request."
+        }
+      ]
+    },
+    {
+      "signalId": "REMOTE_ACCESS",
+      "weight": 35,
+      "rules": [
+        {
+          "id": "rem_apps",
+          "type": "regex",
+          "pattern": "\\b(anydesk|teamviewer|quicksupport|rustdesk|airdroid|ultraviewer|screen share|screen sharing app|share your screen|9-digit code|nine digit code|play protect verification app)\\b",
+          "languages": ["en", "ml", "manglish", "hinglish"],
+          "notes": "Remote screen control tools and code sharing."
+        },
+        {
+          "id": "rem_ml",
+          "type": "regex",
+          "pattern": "(സ്ക്രീൻ ഷെയർ|എനിഡെസ്ക്|ടീംവ്യൂവർ|ആപ്പ് ഇൻസ്റ്റാൾ ചെയ്ത് കോഡ് പറയൂ)",
+          "languages": ["ml"],
+          "notes": "Malayalam remote access lure."
+        }
+      ]
+    },
+    {
+      "signalId": "SUSPICIOUS_URL",
+      "weight": 20,
+      "rules": [
+        {
+          "id": "url_analyzer_hook",
+          "type": "domain",
+          "pattern": "__URL_ANALYZER__",
+          "languages": ["en", "ml"],
+          "notes": "Evaluated offline by urlAnalyzer.ts against officialDomains and URL heuristics."
+        }
+      ]
+    },
+    {
+      "signalId": "APK_INSTALL",
+      "weight": 25,
+      "rules": [
+        {
+          "id": "apk_ext",
+          "type": "regex",
+          "pattern": "([a-z0-9_\\-]+\\.apk\\b|\\binstall (this|the) (apk|file|app from the link)\\b|\\bdownload (the )?app from (this|the) link\\b)",
+          "languages": ["en"],
+          "notes": "Direct APK filename or sideload instruction (Play Store URLs excluded in scanner)."
+        },
+        {
+          "id": "apk_lures",
+          "type": "regex",
+          "pattern": "\\b(rto challan|pm kisan|bank reward points|wedding invitation|electricity bill update)\\b.{0,25}\\b(apk|install|download)\\b",
+          "languages": ["en", "manglish", "hinglish"],
+          "notes": "Common Indian APK malware lures."
+        },
+        {
+          "id": "apk_ml",
+          "type": "regex",
+          "pattern": "(എപികെ|apk|ഈ ഫയൽ ഇൻസ്റ്റാൾ ചെയ്യുക|ലിങ്കിൽ നിന്ന് ആപ്പ് ഡൗൺലോഡ് ചെയ്യുക)",
+          "languages": ["ml"],
+          "notes": "Malayalam APK install lure."
+        }
+      ]
+    },
+    {
+      "signalId": "EMERGENCY_RELATIVE",
+      "weight": 20,
+      "rules": [
+        {
+          "id": "rel_en",
+          "type": "regex",
+          "pattern": "\\b(mom|dad|mother|father|amma|appa|achacha|ammamma|grandma|grandpa|grandson|granddaughter|son|daughter|uncle|aunt)\\b.{0,55}\\b(new number|lost my phone|accident|hospital|arrested|police station|in trouble|need money|send money|urgent help)\\b",
+          "languages": ["en", "manglish"],
+          "notes": "Requires both relative term and emergency/distress cue."
+        },
+        {
+          "id": "rel_ml",
+          "type": "regex",
+          "pattern": "(അമ്മേ|അച്ഛാ|മോൻ|മോൾ|ചേട്ടൻ|മുത്തശ്ശി|മുത്തശ്ശൻ).{0,40}(പുതിയ നമ്പർ|അപകടം|ആശുപത്രി|പോലീസ്|പ്രശ്നത്തിൽ|ഉടനെ പണം)",
+          "languages": ["ml"],
+          "notes": "Malayalam emergency relative impersonation."
+        }
+      ]
+    },
+    {
+      "signalId": "PRIZE_LOTTERY",
+      "weight": 15,
+      "rules": [
+        {
+          "id": "prize_en",
+          "type": "regex",
+          "pattern": "\\b(congratulations you won|you have won|lucky draw|kbc lottery|crore prize|claim your reward|prize processing fee|free gift for completing survey|lottery winner)\\b",
+          "languages": ["en", "hinglish"],
+          "notes": "Prize and lottery advance-fee lures."
+        },
+        {
+          "id": "prize_ml",
+          "type": "regex",
+          "pattern": "(ലോട്ടറി അടിച്ചു|സമ്മാനം ലഭിച്ചു|ലക്കി ഡ്രോ|സമ്മാനം കൈപ്പറ്റാൻ)",
+          "languages": ["ml"],
+          "notes": "Malayalam lottery/prize claim."
+        }
+      ]
+    },
+    {
+      "signalId": "INVESTMENT_FRAUD",
+      "weight": 20,
+      "rules": [
+        {
+          "id": "inv_en",
+          "type": "regex",
+          "pattern": "\\b(guaranteed returns|daily profit|double your money|vip trading group|vip crypto|stock tips group|like and earn|task based earning|pre-ipo allotment|work from home deposit|earn rs ?[0-9]{4,5} daily)\\b",
+          "languages": ["en", "hinglish"],
+          "notes": "Guaranteed profit, task job, and fake trading group lures."
+        },
+        {
+          "id": "inv_ml",
+          "type": "regex",
+          "pattern": "(ഉറപ്പുള്ള ലാഭം|പണം ഇരട്ടിയാക്കാം|ദിവസേന വരുമാനം|വിഐപി ട്രേഡിംഗ് ഗ്രൂപ്പ്|ലൈക്ക് ചെയ്ത് പണം നേടൂ)",
+          "languages": ["ml"],
+          "notes": "Malayalam investment and task scam cues."
+        }
+      ]
+    },
+    {
+      "signalId": "LEGIT_CONTEXT",
+      "weight": -20,
+      "rules": [
+        {
+          "id": "legit_otp_delivery",
+          "type": "regex",
+          "pattern": "\\b(your otp is|otp for transaction|one time password is|is your otp|verification code is)\\b.{0,45}\\b[0-9]{4,8}\\b",
+          "languages": ["en"],
+          "notes": "Standard OTP delivery cue with numeric code."
+        },
+        {
+          "id": "legit_never_share",
+          "type": "regex",
+          "pattern": "\\b(never share|do not share|don't share|bank will never ask)\\b.{0,30}\\b(otp|pin|cvv|password|anyone)\\b",
+          "languages": ["en"],
+          "notes": "Standard bank security warning inside legitimate alerts."
+        },
+        {
+          "id": "legit_bank_txn",
+          "type": "regex",
+          "pattern": "\\b(a/c|acct|account)\\s*(no\\.?|ending)?\\s*(xx|x{2,4}|\\*{2,4})[0-9]{3,4}\\b.{0,40}\\b(debited|credited|avl bal|available bal|rs\\.?|inr)\\b|\\b(avl bal|available balance)\\s*(is|:)?\\s*(rs\\.?|inr)\\s*[0-9,]+",
+          "languages": ["en"],
+          "notes": "Masked account debit/credit/balance alert cue."
+        },
+        {
+          "id": "legit_utility_bill",
+          "type": "regex",
+          "pattern": "\\b(consumer no|consumer number|bill amount|due date|appointment reminder|opd token|police verification for (rental|tenant|passport))\\b",
+          "languages": ["en"],
+          "notes": "Genuine utility bill, medical appointment, or routine verification notice."
+        },
+        {
+          "id": "legit_ml",
+          "type": "regex",
+          "pattern": "(നിങ്ങളുടെ ഒടിപി|ഒടിപി ആരോടും പങ്കുവയ്ക്കരുത്|അക്കൗണ്ടിൽ നിന്ന് .* കുറവ് ചെയ്തു|ബാലൻസ്|വൈദ്യുതി ബിൽ|കൺസ്യൂമർ നമ്പർ)",
+          "languages": ["ml"],
+          "notes": "Malayalam legitimate OTP delivery, bank alert, and KSEB bill cues."
+        },
+        {
+          "id": "legit_manglish",
+          "type": "regex",
+          "pattern": "\\b(ningalude otp|otp aarodum parayaruthu|a/c xx[0-9]{3,4}|kseb bill amount|avl bal)\\b",
+          "languages": ["manglish"],
+          "notes": "Manglish legitimate OTP delivery and bill reminder cues."
+        }
+      ]
+    }
+  ],
+  "overrides": [
+    {
+      "id": "OV_REMOTE_FIN",
+      "requires": ["REMOTE_ACCESS"],
+      "anyOf": ["MONEY_REQUEST", "SENSITIVE_INFO_REQUEST", "AUTHORITY_CLAIM"],
+      "forceVerdict": "DANGEROUS",
+      "minScore": 80,
+      "reason": "Screen-sharing app combined with money, secret codes, or authority impersonation."
+    },
+    {
+      "id": "OV_DIGITAL_ARREST",
+      "requires": ["AUTHORITY_CLAIM", "URGENCY_THREAT"],
+      "anyOf": ["SECRECY", "MONEY_REQUEST"],
+      "forceVerdict": "DANGEROUS",
+      "minScore": 75,
+      "reason": "Authority impersonation with threats and secrecy or payment pressure."
+    },
+    {
+      "id": "OV_SECRET_MONEY",
+      "requires": ["SECRECY", "MONEY_REQUEST"],
+      "forceVerdict": "BE_CAREFUL",
+      "minScore": 45,
+      "reason": "Secrecy combined with a request for money."
+    },
+    {
+      "id": "OV_APK_PRESSURE",
+      "requires": ["APK_INSTALL"],
+      "anyOf": ["AUTHORITY_CLAIM", "URGENCY_THREAT", "MONEY_REQUEST"],
+      "forceVerdict": "DANGEROUS",
+      "minScore": 70,
+      "reason": "Unknown APK installation combined with urgency, authority, or payment."
+    },
+    {
+      "id": "OV_RELATIVE_MONEY",
+      "requires": ["EMERGENCY_RELATIVE"],
+      "anyOf": ["MONEY_REQUEST", "SECRECY"],
+      "forceVerdict": "DANGEROUS",
+      "minScore": 65,
+      "reason": "Relative emergency claim combined with money or secrecy."
+    },
+    {
+      "id": "OV_INFO_PRESSURE",
+      "requires": ["SENSITIVE_INFO_REQUEST"],
+      "anyOf": ["URGENCY_THREAT", "AUTHORITY_CLAIM"],
+      "forceVerdict": "DANGEROUS",
+      "minScore": 65,
+      "reason": "Asking for OTP/PIN/password under urgency or authority claim."
+    },
+    {
+      "id": "OV_PRIZE_FEE",
+      "requires": ["PRIZE_LOTTERY", "MONEY_REQUEST"],
+      "forceVerdict": "BE_CAREFUL",
+      "minScore": 50,
+      "reason": "Prize or lottery claim asking for a fee."
+    },
+    {
+      "id": "OV_INVEST_MONEY",
+      "requires": ["INVESTMENT_FRAUD", "MONEY_REQUEST"],
+      "forceVerdict": "BE_CAREFUL",
+      "minScore": 50,
+      "reason": "Guaranteed-profit offer asking for upfront money."
+    }
+  ],
+  "templates": {
+    "VERDICT_SAFE": {
+      "en": "I did not find scam signs. Still, never share your OTP or PIN.",
+      "ml": "തട്ടിപ്പ് ലക്ഷണങ്ങൾ കണ്ടെത്തിയില്ല. എന്നാലും ഒടിപിയും പിൻ നമ്പറും ആരോടും പങ്കുവയ്ക്കരുത്.",
+      "needsNativeReview": true
+    },
+    "VERDICT_BE_CAREFUL": {
+      "en": "This message has some warning signs. Check with your family or your bank before you do anything.",
+      "ml": "ഈ സന്ദേശത്തിൽ ചില മുന്നറിയിപ്പ് ലക്ഷണങ്ങൾ ഉണ്ട്. എന്തെങ്കിലും ചെയ്യുന്നതിന് മുമ്പ് കുടുംബാംഗങ്ങളോടോ ബാങ്കിനോടോ ചോദിക്കുക.",
+      "needsNativeReview": true
+    },
+    "VERDICT_DANGEROUS": {
+      "en": "This looks like a scam. Do not reply, do not click, do not pay. Call your family now.",
+      "ml": "ഇത് ഒരു തട്ടിപ്പാണെന്ന് തോന്നുന്നു. മറുപടി നൽകരുത്, ലിങ്കിൽ തൊടരുത്, പണം അയക്കരുത്. ഇപ്പോൾ തന്നെ കുടുംബത്തെ വിളിക്കുക.",
+      "needsNativeReview": true
+    },
+    "AUTHORITY_CLAIM": {
+      "en": "Pretending to be police or a government office",
+      "ml": "പോലീസ് അല്ലെങ്കിൽ സർക്കാർ ഓഫീസ് ആണെന്ന് നടിക്കുന്നു",
+      "needsNativeReview": true
+    },
+    "URGENCY_THREAT": {
+      "en": "Pressure to act right now",
+      "ml": "ഇപ്പോൾ തന്നെ പ്രവർത്തിക്കാൻ സമ്മർദ്ദം ചെലുത്തുന്നു",
+      "needsNativeReview": true
+    },
+    "SECRECY": {
+      "en": "Asking you to keep it secret",
+      "ml": "ആരോടും പറയരുതെന്ന് ആവശ്യപ്പെടുന്നു",
+      "needsNativeReview": true
+    },
+    "MONEY_REQUEST": {
+      "en": "Asking for money",
+      "ml": "പണം അയക്കാൻ ആവശ്യപ്പെടുന്നു",
+      "needsNativeReview": true
+    },
+    "SENSITIVE_INFO_REQUEST": {
+      "en": "Asking for your OTP, PIN or password",
+      "ml": "നിങ്ങളുടെ ഒടിപി, പിൻ അല്ലെങ്കിൽ പാസ്‌വേഡ് ചോദിക്കുന്നു",
+      "needsNativeReview": true
+    },
+    "REMOTE_ACCESS": {
+      "en": "Asking you to install a screen-sharing app",
+      "ml": "സ്ക്രീൻ ഷെയറിംഗ് ആപ്പ് ഇൻസ്റ്റാൾ ചെയ്യാൻ ആവശ്യപ്പെടുന്നു",
+      "needsNativeReview": true
+    },
+    "SUSPICIOUS_URL": {
+      "en": "Suspicious link",
+      "ml": "സംശയാസ്പദമായ ലിങ്ക്",
+      "needsNativeReview": true
+    },
+    "APK_INSTALL": {
+      "en": "Asking you to install a file (APK)",
+      "ml": "ഒരു ആപ്പ് ഫയൽ (APK) ഇൻസ്റ്റാൾ ചെയ്യാൻ ആവശ്യപ്പെടുന്നു",
+      "needsNativeReview": true
+    },
+    "EMERGENCY_RELATIVE": {
+      "en": "Pretending to be a relative in trouble",
+      "ml": "പ്രശ്നത്തിലായ ബന്ധു ആണെന്ന് നടിക്കുന്നു",
+      "needsNativeReview": true
+    },
+    "PRIZE_LOTTERY": {
+      "en": "Prize or lottery claim",
+      "ml": "സമ്മാനമോ ലോട്ടറിയോ കിട്ടിയെന്ന് അവകാശപ്പെടുന്നു",
+      "needsNativeReview": true
+    },
+    "INVESTMENT_FRAUD": {
+      "en": "Promise of easy profit",
+      "ml": "എളുപ്പത്തിൽ വലിയ ലാഭം വാഗ്ദാനം ചെയ്യുന്നു",
+      "needsNativeReview": true
+    },
+    "LEGIT_CONTEXT": {
+      "en": "Looks like a standard bank or utility notice",
+      "ml": "സാധാരണ ബാങ്ക് അല്ലെങ്കിൽ സർക്കാർ അറിയിപ്പ് പോലെ തോന്നുന്നു",
+      "needsNativeReview": true
+    },
+    "ACTION_SAFE": {
+      "en": "You do not need to take action. Never share your OTP, PIN, or CVV with anyone.",
+      "ml": "ഒന്നും ചെയ്യേണ്ടതില്ല. ഒടിപി, പിൻ, സിവിവി എന്നിവ ആരോടും പങ്കുവയ്ക്കരുത്.",
+      "needsNativeReview": true
+    },
+    "ACTION_BE_CAREFUL": {
+      "en": "Pause and verify independently. Call your family or visit your bank branch before replying or clicking.",
+      "ml": "നിർത്തുക, സ്വയം ഉറപ്പുവരുത്തുക. മറുപടി നൽകുന്നതിനോ ലിങ്ക് തുറക്കുന്നതിനോ മുമ്പ് കുടുംബത്തെ വിളിക്കുക അല്ലെങ്കിൽ ബാങ്കിൽ ചോദിക്കുക.",
+      "needsNativeReview": true
+    },
+    "ACTION_DANGEROUS": {
+      "en": "Stop replying. Do not click links or send money. Call your family right away.",
+      "ml": "മറുപടി നൽകുന്നത് നിർത്തുക. ലിങ്കുകളിൽ തൊടരുത്, പണം അയക്കരുത്. ഉടൻ കുടുംബാംഗത്തെ വിളിക്കുക.",
+      "needsNativeReview": true
+    },
+    "HELPLINE_1930": {
+      "en": "If money or secret codes were shared, call 1930 quickly or visit cybercrime.gov.in.",
+      "ml": "പണമോ രഹസ്യ കോഡുകളോ പങ്കുവച്ചെങ്കിൽ ഉടൻ 1930-ൽ വിളിക്കുക അല്ലെങ്കിൽ cybercrime.gov.in സന്ദർശിക്കുക.",
+      "needsNativeReview": true
+    }
+  }
+}

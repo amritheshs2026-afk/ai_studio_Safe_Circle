@@ -1,0 +1,526 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Pillar 4)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isAuthorizedGuardian(elderId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/elders/$(elderId)/authorizedGuardians/$(request.auth.uid));
+    }
+
+    // --- Validation Blueprints (Pillar 2) ---
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+        'uid', 'displayName', 'language', 'cloudExplanationsEnabled',
+        'retentionDays', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'uid', 'displayName', 'language', 'cloudExplanationsEnabled',
+        'retentionDays', 'createdAt', 'updatedAt'
+      ]) &&
+      data.uid == userId &&
+      data.uid == request.auth.uid &&
+      data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+      data.language in ['en', 'ml'] &&
+      data.cloudExplanationsEnabled is bool &&
+      data.retentionDays in [90, 180, 365] &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidInvitation(data, invitationId) {
+      return data.keys().hasAll([
+        'elderId', 'elderName', 'tokenHash', 'status', 'attempts',
+        'expiresAt', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'elderId', 'elderName', 'tokenHash', 'status', 'usedBy',
+        'attempts', 'expiresAt', 'createdAt', 'updatedAt'
+      ]) &&
+      data.tokenHash is string && data.tokenHash.size() == 64 &&
+      data.tokenHash.matches('^[a-f0-9]{64}$') &&
+      data.tokenHash == invitationId &&
+      data.elderId is string && isValidId(data.elderId) &&
+      data.elderName is string && data.elderName.size() >= 1 && data.elderName.size() <= 80 &&
+      data.status in ['active', 'used', 'revoked'] &&
+      (!data.keys().hasAny(['usedBy']) || (data.usedBy is string && isValidId(data.usedBy))) &&
+      data.attempts is int && data.attempts >= 0 && data.attempts <= 5 &&
+      data.expiresAt is timestamp &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidConnection(data, connectionId) {
+      return data.keys().hasAll([
+        'id', 'elderId', 'guardianId', 'elderName', 'guardianName',
+        'guardianLabel', 'status', 'shareLevel', 'syncConsent',
+        'invitationId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'id', 'elderId', 'guardianId', 'elderName', 'guardianName',
+        'guardianLabel', 'status', 'shareLevel', 'syncConsent',
+        'invitationId', 'approvedAt', 'revokedAt', 'revokedBy',
+        'createdAt', 'updatedAt'
+      ]) &&
+      data.id == connectionId &&
+      isValidId(data.elderId) &&
+      isValidId(data.guardianId) &&
+      data.elderId != data.guardianId &&
+      data.elderName is string && data.elderName.size() >= 1 && data.elderName.size() <= 80 &&
+      data.guardianName is string && data.guardianName.size() >= 1 && data.guardianName.size() <= 80 &&
+      data.guardianLabel is string && data.guardianLabel.size() <= 40 &&
+      data.status in ['pending', 'active', 'revoked'] &&
+      data.shareLevel in ['none', 'alerts_only', 'alerts_and_summary'] &&
+      data.syncConsent is bool &&
+      data.invitationId is string && data.invitationId.size() == 64 &&
+      data.invitationId.matches('^[a-f0-9]{64}$') &&
+      (!data.keys().hasAny(['approvedAt']) || data.approvedAt is timestamp) &&
+      (!data.keys().hasAny(['revokedAt']) || data.revokedAt is timestamp) &&
+      (!data.keys().hasAny(['revokedBy']) || (data.revokedBy is string && isValidId(data.revokedBy))) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidAuthorizedGuardian(data, elderId, guardianId) {
+      return data.keys().hasAll([
+        'elderId', 'guardianId', 'connectionId', 'shareLevel', 'syncConsent', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'elderId', 'guardianId', 'connectionId', 'shareLevel', 'syncConsent', 'updatedAt'
+      ]) &&
+      data.elderId == elderId &&
+      data.guardianId == guardianId &&
+      data.elderId != data.guardianId &&
+      isValidId(data.connectionId) &&
+      data.shareLevel in ['none', 'alerts_only', 'alerts_and_summary'] &&
+      data.syncConsent is bool &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidIncident(data, incidentId, elderId) {
+      return data.keys().hasAll([
+        'id', 'elderId', 'scannedAt', 'score', 'verdict', 'category',
+        'signalIds', 'detectionMethod', 'rulePackVersion', 'reviewed',
+        'falsePositive', 'userOutcome', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'id', 'elderId', 'scannedAt', 'score', 'verdict', 'category',
+        'signalIds', 'detectionMethod', 'rulePackVersion', 'reviewed',
+        'falsePositive', 'userOutcome', 'createdAt', 'updatedAt'
+      ]) &&
+      data.id == incidentId &&
+      data.elderId == elderId &&
+      data.scannedAt is string && data.scannedAt.size() >= 10 && data.scannedAt.size() <= 40 &&
+      data.score is number && data.score >= 0 && data.score <= 100 &&
+      data.verdict in ['SAFE', 'BE_CAREFUL', 'DANGEROUS'] &&
+      data.category is string && data.category.size() >= 1 && data.category.size() <= 64 &&
+      data.signalIds is list && data.signalIds.size() <= 15 &&
+      (data.signalIds.size() == 0 || (data.signalIds[0] is string && data.signalIds[0].size() <= 40)) &&
+      data.detectionMethod in ['LOCAL_RULES', 'LOCAL_AI', 'CLOUD_AI', 'HYBRID'] &&
+      data.rulePackVersion is string && data.rulePackVersion.size() >= 1 && data.rulePackVersion.size() <= 32 &&
+      data.reviewed is bool &&
+      data.falsePositive is bool &&
+      data.userOutcome in ['avoided', 'interacted', 'unsure', 'none'] &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidGuardianAlert(data, alertId, elderId) {
+      return data.keys().hasAll([
+        'id', 'incidentId', 'elderId', 'elderName', 'guardianId', 'guardianName',
+        'score', 'verdict', 'category', 'signalIds', 'status', 'channels',
+        'userOutcome', 'falsePositive', 'scannedAt', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'id', 'incidentId', 'elderId', 'elderName', 'guardianId', 'guardianName',
+        'score', 'verdict', 'category', 'signalIds', 'status', 'channels',
+        'userOutcome', 'falsePositive', 'scannedAt', 'seenAt', 'reviewedAt',
+        'createdAt', 'updatedAt'
+      ]) &&
+      data.id == alertId &&
+      isValidId(data.incidentId) &&
+      data.elderId == elderId &&
+      data.elderName is string && data.elderName.size() >= 1 && data.elderName.size() <= 80 &&
+      isValidId(data.guardianId) &&
+      data.guardianName is string && data.guardianName.size() >= 1 && data.guardianName.size() <= 80 &&
+      data.score is number && data.score >= 0 && data.score <= 100 &&
+      data.verdict in ['SAFE', 'BE_CAREFUL', 'DANGEROUS'] &&
+      data.category is string && data.category.size() >= 1 && data.category.size() <= 64 &&
+      data.signalIds is list && data.signalIds.size() <= 15 &&
+      (data.signalIds.size() == 0 || (data.signalIds[0] is string && data.signalIds[0].size() <= 40)) &&
+      data.status in ['pending', 'delivered', 'seen', 'reviewed'] &&
+      data.channels is list && data.channels.size() >= 1 && data.channels.size() <= 5 &&
+      data.channels[0] is string && data.channels[0].size() <= 20 &&
+      data.userOutcome in ['avoided', 'interacted', 'unsure', 'none'] &&
+      data.falsePositive is bool &&
+      data.scannedAt is string && data.scannedAt.size() >= 10 && data.scannedAt.size() <= 40 &&
+      (!data.keys().hasAny(['seenAt']) || data.seenAt is timestamp) &&
+      (!data.keys().hasAny(['reviewedAt']) || data.reviewedAt is timestamp) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data, logId, elderId) {
+      return data.keys().hasAll([
+        'id', 'elderId', 'actorId', 'actorName', 'connectionId', 'action', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'id', 'elderId', 'actorId', 'actorName', 'connectionId', 'action', 'createdAt'
+      ]) &&
+      data.id == logId &&
+      data.elderId == elderId &&
+      isValidId(data.actorId) &&
+      data.actorId == request.auth.uid &&
+      data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 80 &&
+      data.connectionId is string && data.connectionId.size() <= 128 &&
+      data.action in [
+        'invited', 'invite_failed', 'redeemed', 'approved', 'rejected',
+        'revoked', 'share_level_changed', 'sync_consent_changed', 'data_deleted'
+      ] &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidNotificationPref(data) {
+      return data.keys().hasAll([
+        'guardianId', 'elderId', 'inApp', 'email', 'push',
+        'notifyOnBeCareful', 'includeElderName', 'quietHoursStart',
+        'quietHoursEnd', 'dangerousBypassesQuietHours', 'escalationMinutes', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'guardianId', 'elderId', 'inApp', 'email', 'push',
+        'notifyOnBeCareful', 'includeElderName', 'quietHoursStart',
+        'quietHoursEnd', 'dangerousBypassesQuietHours', 'escalationMinutes', 'updatedAt'
+      ]) &&
+      isValidId(data.guardianId) &&
+      isValidId(data.elderId) &&
+      data.inApp is bool &&
+      data.email is bool &&
+      data.push is bool &&
+      data.notifyOnBeCareful is bool &&
+      data.includeElderName is bool &&
+      data.quietHoursStart is string && data.quietHoursStart.size() <= 5 &&
+      data.quietHoursEnd is string && data.quietHoursEnd.size() <= 5 &&
+      data.dangerousBypassesQuietHours is bool &&
+      data.escalationMinutes is int && data.escalationMinutes >= 5 && data.escalationMinutes <= 120 &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidHelpRequest(data, requestId) {
+      return data.keys().hasAll([
+        'id', 'userId', 'topic', 'language', 'contactMethod', 'note',
+        'consent', 'status', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'id', 'userId', 'topic', 'language', 'contactMethod', 'note',
+        'consent', 'status', 'createdAt'
+      ]) &&
+      data.id == requestId &&
+      data.userId == request.auth.uid &&
+      data.topic in [
+        'suspicious_call', 'suspicious_message', 'account_setup',
+        'family_linking', 'scam_recovery_guidance', 'accessibility_help'
+      ] &&
+      data.language in ['en', 'ml'] &&
+      data.contactMethod in ['in_app', 'email', 'phone_callback'] &&
+      data.note is string && data.note.size() <= 200 &&
+      data.consent == true &&
+      data.status == 'submitted' &&
+      data.createdAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+    match /test/{docId} {
+      allow get: if isSignedIn();
+      allow list, write: if false;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow create: if isEmailVerified() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isEmailVerified() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'language', 'cloudExplanationsEnabled', 'retentionDays', 'updatedAt'
+        ]);
+      allow delete: if isOwner(userId);
+    }
+
+    match /familyInvitations/{invitationId} {
+      // Single-doc get only (64-hex SHA-256 hash acts as capability); list forbidden to prevent enumeration.
+      allow get: if isSignedIn() && isValidId(invitationId);
+      allow list: if false;
+      allow create: if isEmailVerified() &&
+        isValidId(invitationId) &&
+        isValidInvitation(incoming(), invitationId) &&
+        incoming().elderId == request.auth.uid &&
+        incoming().status == 'active' &&
+        incoming().attempts == 0 &&
+        incoming().expiresAt > request.time &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isEmailVerified() &&
+        isValidId(invitationId) &&
+        isValidInvitation(incoming(), invitationId) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().elderId == existing().elderId &&
+        incoming().tokenHash == existing().tokenHash &&
+        incoming().updatedAt == request.time &&
+        existing().status == 'active' && (
+          // Action 1: Elder revokes their own active invite
+          (
+            existing().elderId == request.auth.uid &&
+            incoming().status == 'revoked' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) ||
+          // Action 2: Guardian redeems unexpired active invite
+          (
+            existing().elderId != request.auth.uid &&
+            request.time < existing().expiresAt &&
+            incoming().status == 'used' &&
+            incoming().usedBy == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'usedBy', 'updatedAt'])
+          )
+        );
+      allow delete: if isOwner(existing().elderId);
+    }
+
+    match /familyConnections/{connectionId} {
+      allow get: if isSignedIn() &&
+        isValidId(connectionId) &&
+        (existing().elderId == request.auth.uid || existing().guardianId == request.auth.uid);
+      allow list: if isSignedIn() &&
+        (resource.data.elderId == request.auth.uid || resource.data.guardianId == request.auth.uid);
+      allow create: if isEmailVerified() &&
+        isValidId(connectionId) &&
+        isValidConnection(incoming(), connectionId) &&
+        incoming().guardianId == request.auth.uid &&
+        incoming().status == 'pending' &&
+        incoming().shareLevel == 'none' &&
+        incoming().syncConsent == false &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/familyInvitations/$(incoming().invitationId)) &&
+        get(/databases/$(database)/documents/familyInvitations/$(incoming().invitationId)).data.status == 'active' &&
+        get(/databases/$(database)/documents/familyInvitations/$(incoming().invitationId)).data.elderId == incoming().elderId &&
+        get(/databases/$(database)/documents/familyInvitations/$(incoming().invitationId)).data.expiresAt > request.time &&
+        getAfter(/databases/$(database)/documents/familyInvitations/$(incoming().invitationId)).data.status == 'used';
+      allow update: if isEmailVerified() &&
+        isValidId(connectionId) &&
+        isValidConnection(incoming(), connectionId) &&
+        incoming().id == existing().id &&
+        incoming().elderId == existing().elderId &&
+        incoming().guardianId == existing().guardianId &&
+        incoming().invitationId == existing().invitationId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        existing().status != 'revoked' && (
+          // Action 1: Elder approves pending connection
+          (
+            existing().elderId == request.auth.uid &&
+            existing().status == 'pending' &&
+            incoming().status == 'active' &&
+            incoming().approvedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'shareLevel', 'syncConsent', 'guardianLabel', 'approvedAt', 'updatedAt'
+            ])
+          ) ||
+          // Action 2: Elder updates share level or sync consent on active connection
+          (
+            existing().elderId == request.auth.uid &&
+            existing().status == 'active' &&
+            incoming().status == 'active' &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'shareLevel', 'syncConsent', 'guardianLabel', 'updatedAt'
+            ])
+          ) ||
+          // Action 3: Elder or Guardian revokes connection (terminal state)
+          (
+            (existing().elderId == request.auth.uid || existing().guardianId == request.auth.uid) &&
+            incoming().status == 'revoked' &&
+            incoming().shareLevel == 'none' &&
+            incoming().syncConsent == false &&
+            incoming().revokedBy == request.auth.uid &&
+            incoming().revokedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'shareLevel', 'syncConsent', 'revokedBy', 'revokedAt', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /elders/{elderId}/authorizedGuardians/{guardianId} {
+      allow get: if isSignedIn() &&
+        isValidId(elderId) && isValidId(guardianId) &&
+        (request.auth.uid == elderId || request.auth.uid == guardianId);
+      allow list: if isSignedIn() &&
+        (resource.data.elderId == request.auth.uid || resource.data.guardianId == request.auth.uid);
+      allow create, update: if isEmailVerified() &&
+        isValidId(elderId) && isValidId(guardianId) &&
+        request.auth.uid == elderId &&
+        isValidAuthorizedGuardian(incoming(), elderId, guardianId) &&
+        incoming().updatedAt == request.time;
+      allow delete: if isEmailVerified() &&
+        isValidId(elderId) && isValidId(guardianId) &&
+        (request.auth.uid == elderId || request.auth.uid == guardianId);
+    }
+
+    match /elders/{elderId}/incidents/{incidentId} {
+      allow get: if isSignedIn() &&
+        isValidId(elderId) && isValidId(incidentId) &&
+        (
+          request.auth.uid == elderId ||
+          (
+            isAuthorizedGuardian(elderId) &&
+            get(/databases/$(database)/documents/elders/$(elderId)/authorizedGuardians/$(request.auth.uid)).data.shareLevel == 'alerts_and_summary'
+          )
+        );
+      allow list: if isSignedIn() && resource.data.elderId == request.auth.uid;
+      allow create: if isEmailVerified() &&
+        isValidId(elderId) && isValidId(incidentId) &&
+        request.auth.uid == elderId &&
+        isValidIncident(incoming(), incidentId, elderId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isEmailVerified() &&
+        isValidId(elderId) && isValidId(incidentId) &&
+        request.auth.uid == elderId &&
+        isValidIncident(incoming(), incidentId, elderId) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'reviewed', 'falsePositive', 'userOutcome', 'updatedAt'
+        ]);
+      allow delete: if isEmailVerified() &&
+        isValidId(elderId) && isValidId(incidentId) &&
+        request.auth.uid == elderId;
+    }
+
+    match /elders/{elderId}/guardianAlerts/{alertId} {
+      allow get: if isSignedIn() &&
+        isValidId(elderId) && isValidId(alertId) &&
+        (
+          request.auth.uid == elderId ||
+          (existing().guardianId == request.auth.uid && isAuthorizedGuardian(elderId))
+        );
+      allow list: if isSignedIn() &&
+        (resource.data.elderId == request.auth.uid || resource.data.guardianId == request.auth.uid);
+      allow create: if isEmailVerified() &&
+        isValidId(elderId) && isValidId(alertId) &&
+        request.auth.uid == elderId &&
+        isValidGuardianAlert(incoming(), alertId, elderId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isEmailVerified() &&
+        isValidId(elderId) && isValidId(alertId) &&
+        isValidGuardianAlert(incoming(), alertId, elderId) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Action 1: Guardian marks seen or reviewed
+          (
+            existing().guardianId == request.auth.uid &&
+            isAuthorizedGuardian(elderId) &&
+            incoming().status in ['seen', 'reviewed'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'seenAt', 'reviewedAt', 'updatedAt'
+            ])
+          ) ||
+          // Action 2: Elder syncs outcome or falsePositive update
+          (
+            request.auth.uid == elderId &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'userOutcome', 'falsePositive', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isEmailVerified() &&
+        isValidId(elderId) && isValidId(alertId) &&
+        request.auth.uid == elderId;
+    }
+
+    match /elders/{elderId}/auditLogs/{logId} {
+      allow get: if isSignedIn() &&
+        isValidId(elderId) && isValidId(logId) &&
+        request.auth.uid == elderId;
+      allow list: if isSignedIn() && resource.data.elderId == request.auth.uid;
+      allow create: if isEmailVerified() &&
+        isValidId(elderId) && isValidId(logId) &&
+        isValidAuditLog(incoming(), logId, elderId) &&
+        incoming().createdAt == request.time && (
+          request.auth.uid == elderId ||
+          (
+            incoming().action == 'redeemed' &&
+            isValidId(incoming().connectionId) &&
+            existsAfter(/databases/$(database)/documents/familyConnections/$(incoming().connectionId)) &&
+            getAfter(/databases/$(database)/documents/familyConnections/$(incoming().connectionId)).data.guardianId == request.auth.uid &&
+            getAfter(/databases/$(database)/documents/familyConnections/$(incoming().connectionId)).data.elderId == elderId
+          )
+        );
+      allow update, delete: if false;
+    }
+
+    match /notificationPreferences/{prefId} {
+      allow get: if isSignedIn() &&
+        isValidId(prefId) &&
+        (existing().guardianId == request.auth.uid || existing().elderId == request.auth.uid);
+      allow list: if isSignedIn() &&
+        (resource.data.guardianId == request.auth.uid || resource.data.elderId == request.auth.uid);
+      allow create, update: if isEmailVerified() &&
+        isValidId(prefId) &&
+        isValidNotificationPref(incoming()) &&
+        incoming().guardianId == request.auth.uid &&
+        incoming().updatedAt == request.time;
+      allow delete: if isSignedIn() && existing().guardianId == request.auth.uid;
+    }
+
+    match /helpRequests/{requestId} {
+      allow get: if isSignedIn() &&
+        isValidId(requestId) &&
+        existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isEmailVerified() &&
+        isValidId(requestId) &&
+        isValidHelpRequest(incoming(), requestId) &&
+        incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+  }
+}

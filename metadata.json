@@ -1,0 +1,6 @@
+{
+  "name": "SafeCircle",
+  "description": "Offline-first bilingual (English & Malayalam) scam shield for senior citizens in India with optional Family Guardian alerts.",
+  "requestFramePermissions": ["microphone", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
